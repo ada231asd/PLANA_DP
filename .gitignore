@@ -52,5 +52,6 @@ downloads/
 
 # === Сгенерированные иконки ===
 static/logo.ico
-health_check.py
-build_exe.py
+push_to_github.py
+cleanup.py
+project_map.txt

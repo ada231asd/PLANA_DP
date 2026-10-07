@@ -1,0 +1,56 @@
+# === Python ===
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# === Виртуальные окружения ===
+.venv/
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# === PyInstaller ===
+*.spec
+dist/
+build/
+
+# === Данные приложения (не в репо!) ===
+settings.json
+history.json
+bootstrap.json
+cache/
+logs/
+debug/
+downloads/
+
+# === Локальные файлы IDE ===
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# === Сгенерированные иконки ===
+static/logo.ico
+health_check.py
+build_exe.py

@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from config import GIF_DOWNLOAD
+from config import GIF_DOWNLOAD, TRANSLATE_ENABLED
 from logger import app_logger
 from storage import (
     get_cached_manga,
@@ -45,8 +45,6 @@ class SearchPage(QWidget):
 
         self.current_manga = None
         self._history_emitted = False
-
-        # защита от «зависшего» оверлея
         self._loading_active = False
 
         # перевод
@@ -89,7 +87,6 @@ class SearchPage(QWidget):
         layout.setContentsMargins(28, 24, 28, 20)
         layout.setSpacing(16)
 
-        # ---------- Header ----------
         header = QHBoxLayout()
         title = QLabel("Поиск манги")
         title.setObjectName("title")
@@ -99,23 +96,37 @@ class SearchPage(QWidget):
 
         # ---------- Search row ----------
         search_row = QHBoxLayout()
-        search_row.setSpacing(10)
+        search_row.setSpacing(8)
 
         self.search_edit = QLineEdit()
         self.search_edit.setPlaceholderText("Введите название манги...")
-        self.search_edit.setClearButtonEnabled(True)
+        self.search_edit.setClearButtonEnabled(False)
         self.search_edit.returnPressed.connect(self.search)
         search_row.addWidget(self.search_edit, 1)
 
+        self.clear_search_btn = QPushButton("✕")
+        self.clear_search_btn.setToolTip("Очистить поиск и текущий тайтл")
+        self.clear_search_btn.setFixedWidth(40)
+        self.clear_search_btn.setMinimumHeight(34)
+        self.clear_search_btn.setCursor(Qt.PointingHandCursor)
+        self.clear_search_btn.clicked.connect(self.clear_search)
+        search_row.addWidget(self.clear_search_btn)
+
         self.search_button = QPushButton("Найти")
         self.search_button.setObjectName("primary")
+        self.search_button.setMinimumHeight(34)
         self.search_button.clicked.connect(self.search)
         search_row.addWidget(self.search_button)
 
+        # Кнопка перевода — только если включена в config
         self.translate_button = QPushButton("🌐  Перевести")
+        self.translate_button.setMinimumHeight(34)
+        self.translate_button.setCursor(Qt.PointingHandCursor)
         self.translate_button.clicked.connect(self.toggle_translate)
         self.translate_button.setEnabled(False)
-        search_row.addWidget(self.translate_button)
+
+        if TRANSLATE_ENABLED:
+            search_row.addWidget(self.translate_button)
 
         layout.addLayout(search_row)
 
@@ -176,10 +187,14 @@ class SearchPage(QWidget):
         ch_header.addStretch()
 
         self.select_all_button = QPushButton("Выбрать все")
+        self.select_all_button.setMinimumHeight(34)
+        self.select_all_button.setCursor(Qt.PointingHandCursor)
         self.select_all_button.clicked.connect(self.select_all)
         ch_header.addWidget(self.select_all_button)
 
         self.clear_button = QPushButton("Снять все")
+        self.clear_button.setMinimumHeight(34)
+        self.clear_button.setCursor(Qt.PointingHandCursor)
         self.clear_button.clicked.connect(self.clear_all)
         ch_header.addWidget(self.clear_button)
 
@@ -215,7 +230,6 @@ class SearchPage(QWidget):
 
         dl_layout.addStretch()
 
-        # GIF над панелью скачивания
         self.download_gif = QLabel()
         self.download_gif.setAlignment(Qt.AlignCenter)
         self.download_gif.setVisible(False)
@@ -233,6 +247,8 @@ class SearchPage(QWidget):
 
         self.download_button = QPushButton("Скачать выбранные")
         self.download_button.setObjectName("primary")
+        self.download_button.setMinimumHeight(36)
+        self.download_button.setCursor(Qt.PointingHandCursor)
         self.download_button.clicked.connect(self.download_selected)
         self.download_button.setEnabled(False)
         dl_layout.addWidget(self.download_button)
@@ -242,7 +258,7 @@ class SearchPage(QWidget):
         layout.addLayout(bottom, 2)
 
     # =========================================================
-    # SEARCH
+    # SEARCH / CLEAR
     # =========================================================
 
     def search(self):
@@ -250,6 +266,30 @@ class SearchPage(QWidget):
         if not query:
             return
         self.open_query(query)
+
+    def clear_search(self):
+        if self.search_thread is not None and self.search_thread.isRunning():
+            return
+        if self.manga_thread is not None and self.manga_thread.isRunning():
+            return
+
+        self.current_manga = None
+        self._history_emitted = False
+        self._reset_translate_state()
+
+        self.search_edit.clear()
+        self.manga_title.setText("Начните поиск")
+        self.meta.setText("")
+        self.description.clear()
+        self.chapters.clear()
+        self.cover.clear()
+        self.cover.setText("Обложка")
+        self.download_button.setEnabled(False)
+        self.translate_button.setEnabled(False)
+        self.progress.setValue(0)
+        self.progress_text.setText("Ожидание")
+
+        app_logger.write("Поиск очищен.")
 
     def open_query(self, query):
         if self.search_thread is not None and self.search_thread.isRunning():
@@ -332,7 +372,7 @@ class SearchPage(QWidget):
 
         settings = load_settings()
 
-        # ---------- КЕШ ----------
+        # КЕШ
         if settings.get("use_cache", True) and not force_refresh:
             cached = get_cached_manga(url)
             if cached:
@@ -378,7 +418,7 @@ class SearchPage(QWidget):
                 self._hide_loading()
                 return
 
-        # ---------- СЕТЬ ----------
+        # СЕТЬ
         self.current_manga = None
         self._history_emitted = False
         self._reset_translate_state()
@@ -485,7 +525,8 @@ class SearchPage(QWidget):
             self.chapters.addItem(item)
 
         self.download_button.setEnabled(bool(manga.chapters))
-        self.translate_button.setEnabled(True)
+        if TRANSLATE_ENABLED:
+            self.translate_button.setEnabled(True)
         app_logger.write(f"Загружено глав: {len(manga.chapters)}")
 
     # =========================================================
@@ -493,6 +534,8 @@ class SearchPage(QWidget):
     # =========================================================
 
     def toggle_translate(self):
+        if not TRANSLATE_ENABLED:
+            return
         if not self.current_manga:
             return
 

@@ -6,8 +6,8 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QFileDialog,
-    QFormLayout,
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QProgressDialog,
     QPushButton,
+    QSizePolicy,
     QSpinBox,
     QVBoxLayout,
     QWidget,
@@ -42,6 +43,8 @@ NOISY_PREFIXES = (
     "[HTTP ",
 )
 
+FIELD_HEIGHT = 34
+
 
 class SettingsPage(QWidget):
     settings_saved = Signal()
@@ -65,6 +68,24 @@ class SettingsPage(QWidget):
         app_logger.cleared.connect(self._on_log_cleared)
 
     # =========================================================
+    # HELPERS
+    # =========================================================
+
+    def _lbl(self, text):
+        l = QLabel(text)
+        l.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        l.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
+        l.setContentsMargins(0, 0, 8, 0)
+        return l
+
+    def _btn(self, text, min_w=100):
+        b = QPushButton(text)
+        b.setMinimumHeight(FIELD_HEIGHT)
+        b.setMinimumWidth(min_w)
+        b.setCursor(Qt.PointingHandCursor)
+        return b
+
+    # =========================================================
     # UI
     # =========================================================
 
@@ -77,82 +98,126 @@ class SettingsPage(QWidget):
         title.setObjectName("title")
         layout.addWidget(title)
 
-        # ---------- Основные ----------
+        # ================= ОСНОВНЫЕ =================
         card = QFrame()
         card.setObjectName("card")
 
         card_layout = QVBoxLayout(card)
-        card_layout.setContentsMargins(26, 24, 26, 24)
-        card_layout.setSpacing(18)
+        card_layout.setContentsMargins(28, 24, 28, 24)
+        card_layout.setSpacing(0)
 
-        form = QFormLayout()
-        form.setSpacing(14)
-        form.setLabelAlignment(Qt.AlignLeft)
-        form.setFormAlignment(Qt.AlignLeft | Qt.AlignTop)
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(14)
+        grid.setVerticalSpacing(12)
+        grid.setColumnStretch(0, 0)  # лейблы — по содержимому
+        grid.setColumnStretch(1, 1)  # поля — растягиваются
+        grid.setContentsMargins(0, 0, 0, 0)
+
+        row = 0
+
+        # ---- Папка загрузок ----
+        grid.addWidget(self._lbl("Папка загрузок"), row, 0)
 
         dir_row = QHBoxLayout()
+        dir_row.setContentsMargins(0, 0, 0, 0)
         dir_row.setSpacing(8)
+
         self.download_dir = QLineEdit()
+        self.download_dir.setMinimumHeight(FIELD_HEIGHT)
         dir_row.addWidget(self.download_dir, 1)
 
-        browse = QPushButton("Обзор...")
+        browse = self._btn("Обзор...", min_w=110)
         browse.clicked.connect(self._pick_dir)
         dir_row.addWidget(browse)
 
-        open_dir = QPushButton("Открыть")
+        open_dir = self._btn("Открыть", min_w=110)
         open_dir.clicked.connect(self._open_dir)
         dir_row.addWidget(open_dir)
 
         dir_widget = QWidget()
         dir_widget.setLayout(dir_row)
-        form.addRow("Папка загрузок", dir_widget)
+        grid.addWidget(dir_widget, row, 1)
+        row += 1
 
+        # ---- Браузер ----
+        grid.addWidget(self._lbl("Браузер"), row, 0)
         self.browser = QComboBox()
         self.browser.addItems(["firefox", "chromium"])
-        form.addRow("Браузер", self.browser)
+        self.browser.setMinimumHeight(FIELD_HEIGHT)
+        self.browser.setMinimumWidth(220)
+        self.browser.setMaximumWidth(300)
+        self.browser.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        grid.addWidget(self.browser, row, 1, Qt.AlignLeft)
+        row += 1
 
+        # ---- Чекбоксы (на всю ширину) ----
         self.headless = QCheckBox("Запускать браузер в фоне (headless)")
-        form.addRow("", self.headless)
+        self.headless.setMinimumHeight(FIELD_HEIGHT)
+        grid.addWidget(self.headless, row, 0, 1, 2)
+        row += 1
 
         self.use_cache = QCheckBox(
             "Использовать кеш тайтлов (не перезагружать с сайта)"
         )
-        form.addRow("", self.use_cache)
+        self.use_cache.setMinimumHeight(FIELD_HEIGHT)
+        grid.addWidget(self.use_cache, row, 0, 1, 2)
+        row += 1
 
         self.delete_chapters = QCheckBox("Удалять скачанные главы вместе с историей")
-        form.addRow("", self.delete_chapters)
+        self.delete_chapters.setMinimumHeight(FIELD_HEIGHT)
+        grid.addWidget(self.delete_chapters, row, 0, 1, 2)
+        row += 1
 
+        # ---- Числовые поля ----
+        grid.addWidget(self._lbl("Повторов загрузки картинки"), row, 0)
         self.retries = QSpinBox()
         self.retries.setRange(1, 10)
-        form.addRow("Повторов загрузки картинки", self.retries)
+        self.retries.setMinimumHeight(FIELD_HEIGHT)
+        self.retries.setFixedWidth(140)
+        grid.addWidget(self.retries, row, 1, Qt.AlignLeft)
+        row += 1
 
+        grid.addWidget(self._lbl("Таймаут навигации"), row, 0)
         self.nav_timeout = QSpinBox()
         self.nav_timeout.setRange(5000, 180000)
         self.nav_timeout.setSingleStep(1000)
         self.nav_timeout.setSuffix(" мс")
-        form.addRow("Таймаут навигации", self.nav_timeout)
+        self.nav_timeout.setMinimumHeight(FIELD_HEIGHT)
+        self.nav_timeout.setFixedWidth(160)
+        grid.addWidget(self.nav_timeout, row, 1, Qt.AlignLeft)
+        row += 1
 
+        grid.addWidget(self._lbl("Таймаут загрузки картинки"), row, 0)
         self.dl_timeout = QSpinBox()
         self.dl_timeout.setRange(5000, 300000)
         self.dl_timeout.setSingleStep(1000)
         self.dl_timeout.setSuffix(" мс")
-        form.addRow("Таймаут загрузки картинки", self.dl_timeout)
+        self.dl_timeout.setMinimumHeight(FIELD_HEIGHT)
+        self.dl_timeout.setFixedWidth(160)
+        grid.addWidget(self.dl_timeout, row, 1, Qt.AlignLeft)
+        row += 1
 
+        grid.addWidget(self._lbl("Лимит истории"), row, 0)
         self.history_limit = QSpinBox()
         self.history_limit.setRange(10, 2000)
         self.history_limit.setSingleStep(10)
-        form.addRow("Лимит истории", self.history_limit)
+        self.history_limit.setMinimumHeight(FIELD_HEIGHT)
+        self.history_limit.setFixedWidth(140)
+        grid.addWidget(self.history_limit, row, 1, Qt.AlignLeft)
+        row += 1
 
-        card_layout.addLayout(form)
+        card_layout.addLayout(grid)
+        card_layout.addSpacing(20)
 
+        # ---- Кнопки ----
         save_row = QHBoxLayout()
         save_row.addStretch()
 
-        reset = QPushButton("Сбросить настройки")
+        reset = self._btn("Сбросить настройки", min_w=200)
         reset.clicked.connect(self._reset_settings)
         save_row.addWidget(reset)
 
-        save = QPushButton("Сохранить")
+        save = self._btn("Сохранить", min_w=160)
         save.setObjectName("primary")
         save.clicked.connect(self.save)
         save_row.addWidget(save)
@@ -161,12 +226,12 @@ class SettingsPage(QWidget):
 
         layout.addWidget(card)
 
-        # ---------- Обновления ----------
+        # ================= ОБНОВЛЕНИЯ =================
         upd_card = QFrame()
         upd_card.setObjectName("card")
 
         upd_layout = QVBoxLayout(upd_card)
-        upd_layout.setContentsMargins(20, 18, 20, 18)
+        upd_layout.setContentsMargins(24, 20, 24, 20)
         upd_layout.setSpacing(12)
 
         upd_title = QLabel("ОБНОВЛЕНИЯ")
@@ -181,7 +246,7 @@ class SettingsPage(QWidget):
         upd_row = QHBoxLayout()
         upd_row.addStretch()
 
-        self.check_updates_btn = QPushButton("Проверить обновления")
+        self.check_updates_btn = self._btn("Проверить обновления", min_w=240)
         self.check_updates_btn.setObjectName("primary")
         self.check_updates_btn.clicked.connect(self._check_updates)
         self.check_updates_btn.setEnabled(bool(GITHUB_CHECK_ENABLED))
@@ -191,12 +256,12 @@ class SettingsPage(QWidget):
 
         layout.addWidget(upd_card)
 
-        # ---------- Опасная зона / Удаление ----------
+        # ================= УПРАВЛЕНИЕ ДАННЫМИ =================
         danger_card = QFrame()
         danger_card.setObjectName("card")
 
         dl = QVBoxLayout(danger_card)
-        dl.setContentsMargins(20, 18, 20, 18)
+        dl.setContentsMargins(24, 20, 24, 20)
         dl.setSpacing(12)
 
         danger_title = QLabel("УПРАВЛЕНИЕ ДАННЫМИ")
@@ -212,13 +277,12 @@ class SettingsPage(QWidget):
         dl.addWidget(danger_hint)
 
         row1 = QHBoxLayout()
-        wipe_cache = QPushButton("Очистить кеш и историю")
+        wipe_cache = self._btn("Очистить кеш и историю", min_w=260)
         wipe_cache.clicked.connect(self._wipe_cache)
         row1.addWidget(wipe_cache)
         row1.addStretch()
         dl.addLayout(row1)
 
-        # Деинсталлятор
         row2 = QHBoxLayout()
 
         self.un_dl_check = QCheckBox("Удалить папку загрузок")
@@ -231,6 +295,9 @@ class SettingsPage(QWidget):
         row2.addStretch()
 
         uninstall_btn = QPushButton("Удалить PLANA_DP")
+        uninstall_btn.setMinimumHeight(FIELD_HEIGHT)
+        uninstall_btn.setMinimumWidth(220)
+        uninstall_btn.setCursor(Qt.PointingHandCursor)
         uninstall_btn.setStyleSheet(
             "background:#3a1a1a;border:1px solid #7a2e2e;color:#ffcccc;font-weight:700;"
         )
@@ -241,12 +308,12 @@ class SettingsPage(QWidget):
 
         layout.addWidget(danger_card)
 
-        # ---------- Логи ----------
+        # ================= ЛОГИ =================
         log_card = QFrame()
         log_card.setObjectName("card")
 
         log_layout = QVBoxLayout(log_card)
-        log_layout.setContentsMargins(20, 18, 20, 18)
+        log_layout.setContentsMargins(24, 20, 24, 20)
         log_layout.setSpacing(12)
 
         log_header = QHBoxLayout()
@@ -255,7 +322,7 @@ class SettingsPage(QWidget):
         log_header.addWidget(log_header_title)
         log_header.addStretch()
 
-        self.toggle_log_btn = QPushButton("Показать")
+        self.toggle_log_btn = self._btn("Показать", min_w=130)
         self.toggle_log_btn.clicked.connect(self._toggle_log)
         log_header.addWidget(self.toggle_log_btn)
 
@@ -273,11 +340,11 @@ class SettingsPage(QWidget):
         controls.addWidget(self.filter_check)
         controls.addStretch()
 
-        clear_btn = QPushButton("Очистить")
+        clear_btn = self._btn("Очистить", min_w=120)
         clear_btn.clicked.connect(app_logger.clear)
         controls.addWidget(clear_btn)
 
-        export_btn = QPushButton("Сохранить в файл...")
+        export_btn = self._btn("Сохранить в файл...", min_w=190)
         export_btn.clicked.connect(self._export_log)
         controls.addWidget(export_btn)
 
@@ -400,6 +467,16 @@ class SettingsPage(QWidget):
     def _on_update_result(self, info):
         if not info:
             QMessageBox.information(self, "Обновления", "Не удалось получить данные.")
+            return
+
+        if info.get("no_releases"):
+            QMessageBox.information(
+                self,
+                "Обновления",
+                f"Установлена версия {info.get('current')}.\n\n"
+                f"На GitHub пока нет ни одного релиза — "
+                f"проверять нечего.",
+            )
             return
 
         if not info.get("has_update"):
@@ -597,7 +674,6 @@ class SettingsPage(QWidget):
         if not ok:
             return
 
-        # Выходим из приложения — .bat подчистит всё за нами
         from PySide6.QtWidgets import QApplication
 
         app = QApplication.instance()

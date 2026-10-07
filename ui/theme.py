@@ -17,17 +17,20 @@ QLabel#logo {
     font-weight: 800;
     letter-spacing: 3px;
     color: #c5a4ff;
+    background: transparent;
 }
 QLabel#sublogo {
     color: #6b6f80;
     font-size: 10px;
     letter-spacing: 3px;
+    background: transparent;
 }
 QLabel#section {
     color: #8f94a9;
     font-size: 10px;
     font-weight: 700;
     letter-spacing: 2px;
+    background: transparent;
 }
 
 QPushButton#nav {
@@ -54,16 +57,84 @@ QLineEdit, QTextEdit, QListWidget, QComboBox, QSpinBox {
     background: #14161f;
     border: 1px solid #242736;
     border-radius: 8px;
-    padding: 8px 10px;
+    padding: 4px 10px;
     color: #f0f0f5;
+    min-height: 26px;
     selection-background-color: #4a3a7a;
 }
 QLineEdit:focus, QTextEdit:focus, QComboBox:focus, QSpinBox:focus {
     border: 1px solid #8e63d9;
 }
-QComboBox::drop-down {
+
+/* ---------- QSpinBox ---------- */
+QSpinBox {
+    padding-right: 26px;
+}
+
+QSpinBox::up-button, QSpinBox::down-button {
+    subcontrol-origin: border;
+    width: 22px;
+    background: transparent;
     border: none;
+    margin: 0;
+}
+QSpinBox::up-button {
+    subcontrol-position: top right;
+}
+QSpinBox::down-button {
+    subcontrol-position: bottom right;
+}
+QSpinBox::up-button:hover, QSpinBox::down-button:hover {
+    background: #2a2e3d;
+    border-radius: 4px;
+}
+QSpinBox::up-arrow {
+    image: none;
+    border-left: 4px solid transparent;
+    border-right: 4px solid transparent;
+    border-bottom: 4px solid #a4a7b6;
+    width: 0;
+    height: 0;
+}
+QSpinBox::down-arrow {
+    image: none;
+    border-left: 4px solid transparent;
+    border-right: 4px solid transparent;
+    border-top: 4px solid #a4a7b6;
+    width: 0;
+    height: 0;
+}
+
+/* ---------- QComboBox ---------- */
+QComboBox {
+    padding-right: 28px;
+}
+QComboBox::drop-down {
+    subcontrol-origin: border;
+    subcontrol-position: top right;
     width: 24px;
+    border: none;
+    background: transparent;
+}
+QComboBox::drop-down:hover {
+    background: #2a2e3d;
+    border-top-right-radius: 7px;
+    border-bottom-right-radius: 7px;
+}
+QComboBox::down-arrow {
+    image: none;
+    border-left: 4px solid transparent;
+    border-right: 4px solid transparent;
+    border-top: 5px solid #a4a7b6;
+    width: 0;
+    height: 0;
+}
+QComboBox QAbstractItemView {
+    background: #14161f;
+    border: 1px solid #242736;
+    color: #f0f0f5;
+    selection-background-color: #2a2140;
+    outline: none;
 }
 
 /* Buttons */
@@ -71,8 +142,9 @@ QPushButton {
     background: #1c1f2b;
     border: 1px solid #2a2e3d;
     border-radius: 8px;
-    padding: 8px 14px;
+    padding: 7px 14px;
     color: #e6e6ee;
+    min-height: 22px;
 }
 QPushButton:hover { background: #242838; }
 QPushButton:pressed { background: #1a1d28; }
@@ -103,8 +175,49 @@ QFrame#card {
 QLabel#title {
     font-size: 24px;
     font-weight: 800;
+    background: transparent;
 }
-QLabel#muted { color: #8b8f9e; }
+QLabel#muted {
+    color: #8b8f9e;
+    background: transparent;
+}
+
+QCheckBox {
+    color: #e6e6ee;
+    spacing: 8px;
+    background: transparent;
+}
+QCheckBox::indicator {
+    width: 16px;
+    height: 16px;
+    border-radius: 4px;
+    border: 1px solid #2a2e3d;
+    background: #14161f;
+}
+QCheckBox::indicator:hover {
+    border-color: #8e63d9;
+}
+QCheckBox::indicator:checked {
+    background: #7b52c9;
+    border-color: #8e63d9;
+}
+
+QRadioButton {
+    color: #e6e6ee;
+    spacing: 8px;
+    background: transparent;
+}
+QRadioButton::indicator {
+    width: 14px;
+    height: 14px;
+    border-radius: 7px;
+    border: 1px solid #2a2e3d;
+    background: #14161f;
+}
+QRadioButton::indicator:checked {
+    background: #7b52c9;
+    border-color: #8e63d9;
+}
 
 QListWidget {
     outline: none;
@@ -163,4 +276,13 @@ QStatusBar {
 }
 
 QMessageBox { background: #12141c; }
+QMessageBox QLabel { color: #e6e6ee; }
+
+QToolTip {
+    background: #1c1f2b;
+    color: #e6e6ee;
+    border: 1px solid #2a2e3d;
+    padding: 4px 6px;
+    border-radius: 6px;
+}
 """

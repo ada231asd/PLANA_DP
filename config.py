@@ -14,7 +14,7 @@ STATIC_DIR = get_static_dir()
 GIF_DOWNLOAD = STATIC_DIR / "tendou-kei-blue-archive.gif"
 GIF_LOADING = STATIC_DIR / "kei-tendou-blue-archive.gif"
 GIF_EMPTY = STATIC_DIR / "kei-tendou-blue-archive.gif"
-
+TRANSLATE_ENABLED = False
 # Логотип
 LOGO_JPG = STATIC_DIR / "logo.jpg"
 LOGO_ICO = STATIC_DIR / "logo.ico"

@@ -7,6 +7,7 @@ from bs4 import BeautifulSoup
 from playwright.sync_api import sync_playwright
 
 from config import MGEKO_BASE, SEARCH_URL
+from paths import get_data_dir
 from storage import load_settings
 from models import Manga, Chapter
 
@@ -30,10 +31,9 @@ class MgekoClient:
     # ==========================================================
 
     def start(self):
-        # читаем настройки заново — на случай если пользователь их поменял
         self.settings = load_settings()
 
-        headless = bool(self.settings.get("headless", False))
+        headless = bool(self.settings.get("headless", True))
         browser_name = str(self.settings.get("browser", "firefox")).lower().strip()
         nav_timeout = int(self.settings.get("navigation_timeout", 45000))
 
@@ -170,7 +170,7 @@ class MgekoClient:
         if not self.page:
             return
         try:
-            debug_dir = Path(__file__).resolve().parent.parent / "debug"
+            debug_dir = get_data_dir() / "debug"
             debug_dir.mkdir(parents=True, exist_ok=True)
             safe_name = re.sub(r"[^a-zA-Z0-9_.-]+", "_", name)
             html_path = debug_dir / f"{safe_name}.html"
@@ -182,12 +182,23 @@ class MgekoClient:
     def save_debug_screenshot(self, name):
         if not self.page:
             return
+
+        import os
+
+        if not os.environ.get("PLANA_DP_DEBUG"):
+            return
+
         try:
-            debug_dir = Path(__file__).resolve().parent.parent / "debug"
+            debug_dir = get_data_dir() / "debug"
             debug_dir.mkdir(parents=True, exist_ok=True)
             safe_name = re.sub(r"[^a-zA-Z0-9_.-]+", "_", name)
             screenshot_path = debug_dir / f"{safe_name}.png"
-            self.page.screenshot(path=str(screenshot_path), full_page=True)
+
+            self.page.screenshot(
+                path=str(screenshot_path),
+                full_page=False,
+                timeout=8000,
+            )
             self.log(f"DEBUG screenshot сохранён: {screenshot_path}")
         except Exception as exc:
             self.log(f"Не удалось сделать screenshot: {exc}")

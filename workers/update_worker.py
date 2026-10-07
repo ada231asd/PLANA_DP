@@ -1,4 +1,5 @@
 import json
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -65,8 +66,30 @@ class UpdateWorker(QObject):
                     "User-Agent": "PLANA_DP-Updater",
                 },
             )
-            with urllib.request.urlopen(req, timeout=20) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
+
+            try:
+                with urllib.request.urlopen(req, timeout=20) as resp:
+                    data = json.loads(resp.read().decode("utf-8"))
+            except urllib.error.HTTPError as exc:
+                if exc.code == 404:
+                    self.log.emit("На GitHub пока нет ни одного релиза.")
+                    self.result.emit(
+                        {
+                            "has_update": False,
+                            "current": self.current,
+                            "latest": "",
+                            "name": "",
+                            "notes": "",
+                            "html_url": f"https://github.com/{self.repo}",
+                            "asset_url": "",
+                            "asset_name": "",
+                            "published_at": "",
+                            "no_releases": True,
+                        }
+                    )
+                    self.finished.emit()
+                    return
+                raise
 
             tag = (data.get("tag_name") or "").strip()
             name = (data.get("name") or "").strip()
@@ -106,6 +129,7 @@ class UpdateWorker(QObject):
                     "asset_url": asset_url,
                     "asset_name": asset_name,
                     "published_at": published,
+                    "no_releases": False,
                 }
             )
 

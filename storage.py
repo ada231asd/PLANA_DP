@@ -30,7 +30,7 @@ def _manga_cache_dir():
 def get_default_settings():
     return {
         "download_dir": str(get_download_dir()),
-        "headless": True,
+        "headless": False,
         "browser": "firefox",
         "image_retries": 3,
         "navigation_timeout": 45000,
@@ -38,6 +38,7 @@ def get_default_settings():
         "history_limit": 200,
         "use_cache": True,
         "delete_chapters_with_history": False,
+        "show_logs_section": False,
     }
 
 

@@ -80,3 +80,13 @@ class AppLogger(QObject):
 
 
 app_logger = AppLogger.instance()
+
+
+def delete_log_file():
+
+    try:
+        f = _log_file()
+        if f.exists():
+            f.unlink()
+    except Exception:
+        pass

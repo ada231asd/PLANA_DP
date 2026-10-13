@@ -3,6 +3,7 @@ from pathlib import Path
 from PySide6.QtCore import Qt, QUrl, QThread, Signal
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
+    QApplication,
     QCheckBox,
     QComboBox,
     QFileDialog,
@@ -12,9 +13,9 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMessageBox,
-    QPlainTextEdit,
     QProgressDialog,
     QPushButton,
+    QScrollArea,
     QSizePolicy,
     QSpinBox,
     QVBoxLayout,
@@ -30,29 +31,27 @@ from storage import (
     wipe_app_data,
     clear_history,
 )
-from paths import get_data_dir
+from paths import (
+    get_data_dir,
+    default_data_dir,
+    is_in_user_config,
+    migrate_data_dir_to_default,
+)
 
 from workers.update_worker import UpdateWorker, DownloadWorker
 from workers.uninstall_worker import UninstallWorker
 
 
-NOISY_PREFIXES = (
-    "[JS]",
-    "[REQUEST FAILED]",
-    "[PAGE ERROR]",
-    "[HTTP ",
-)
-
 FIELD_HEIGHT = 34
+ROW_MIN_HEIGHT = 40
 
 
 class SettingsPage(QWidget):
     settings_saved = Signal()
+    logs_visibility_changed = Signal(bool)
 
     def __init__(self, parent=None):
         super().__init__(parent)
-
-        self._log_visible = False
 
         self._update_thread = None
         self._update_worker = None
@@ -63,9 +62,6 @@ class SettingsPage(QWidget):
 
         self._build_ui()
         self.load()
-
-        app_logger.message.connect(self._on_log_line)
-        app_logger.cleared.connect(self._on_log_cleared)
 
     # =========================================================
     # HELPERS
@@ -85,12 +81,33 @@ class SettingsPage(QWidget):
         b.setCursor(Qt.PointingHandCursor)
         return b
 
+    def _field_h(self, widget):
+        widget.setMinimumHeight(FIELD_HEIGHT)
+        return widget
+
     # =========================================================
     # UI
     # =========================================================
 
     def _build_ui(self):
-        layout = QVBoxLayout(self)
+        # корневой layout: только scroll на всю страницу
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+
+        content = QWidget()
+        scroll.setWidget(content)
+
+        outer.addWidget(scroll)
+
+        # ---- содержимое страницы ----
+        layout = QVBoxLayout(content)
         layout.setContentsMargins(28, 24, 28, 20)
         layout.setSpacing(16)
 
@@ -109,11 +126,14 @@ class SettingsPage(QWidget):
         grid = QGridLayout()
         grid.setHorizontalSpacing(14)
         grid.setVerticalSpacing(12)
-        grid.setColumnStretch(0, 0)  # лейблы — по содержимому
-        grid.setColumnStretch(1, 1)  # поля — растягиваются
+        grid.setColumnStretch(0, 0)
+        grid.setColumnStretch(1, 1)
         grid.setContentsMargins(0, 0, 0, 0)
 
         row = 0
+
+        def set_row_min(r):
+            grid.setRowMinimumHeight(r, ROW_MIN_HEIGHT)
 
         # ---- Папка загрузок ----
         grid.addWidget(self._lbl("Папка загрузок"), row, 0)
@@ -122,8 +142,7 @@ class SettingsPage(QWidget):
         dir_row.setContentsMargins(0, 0, 0, 0)
         dir_row.setSpacing(8)
 
-        self.download_dir = QLineEdit()
-        self.download_dir.setMinimumHeight(FIELD_HEIGHT)
+        self.download_dir = self._field_h(QLineEdit())
         dir_row.addWidget(self.download_dir, 1)
 
         browse = self._btn("Обзор...", min_w=110)
@@ -136,80 +155,99 @@ class SettingsPage(QWidget):
 
         dir_widget = QWidget()
         dir_widget.setLayout(dir_row)
+        dir_widget.setMinimumHeight(FIELD_HEIGHT)
         grid.addWidget(dir_widget, row, 1)
+        set_row_min(row)
         row += 1
 
         # ---- Браузер ----
         grid.addWidget(self._lbl("Браузер"), row, 0)
-        self.browser = QComboBox()
+        self.browser = self._field_h(QComboBox())
         self.browser.addItems(["firefox", "chromium"])
-        self.browser.setMinimumHeight(FIELD_HEIGHT)
-        self.browser.setMinimumWidth(220)
-        self.browser.setMaximumWidth(300)
+        self.browser.setMinimumWidth(200)
+        self.browser.setMaximumWidth(320)
         self.browser.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
         grid.addWidget(self.browser, row, 1, Qt.AlignLeft)
+        set_row_min(row)
         row += 1
 
-        # ---- Чекбоксы (на всю ширину) ----
+        # ---- Чекбоксы ----
         self.headless = QCheckBox("Запускать браузер в фоне (headless)")
-        self.headless.setMinimumHeight(FIELD_HEIGHT)
+        self.headless.setMinimumHeight(ROW_MIN_HEIGHT)
         grid.addWidget(self.headless, row, 0, 1, 2)
+        set_row_min(row)
         row += 1
 
         self.use_cache = QCheckBox(
             "Использовать кеш тайтлов (не перезагружать с сайта)"
         )
-        self.use_cache.setMinimumHeight(FIELD_HEIGHT)
+        self.use_cache.setMinimumHeight(ROW_MIN_HEIGHT)
         grid.addWidget(self.use_cache, row, 0, 1, 2)
+        set_row_min(row)
         row += 1
 
         self.delete_chapters = QCheckBox("Удалять скачанные главы вместе с историей")
-        self.delete_chapters.setMinimumHeight(FIELD_HEIGHT)
+        self.delete_chapters.setMinimumHeight(ROW_MIN_HEIGHT)
         grid.addWidget(self.delete_chapters, row, 0, 1, 2)
+        set_row_min(row)
+        row += 1
+
+        self.show_logs = QCheckBox("Показывать раздел логов в сайдбаре")
+        self.show_logs.setMinimumHeight(ROW_MIN_HEIGHT)
+        self.show_logs.stateChanged.connect(self._on_show_logs_changed)
+        grid.addWidget(self.show_logs, row, 0, 1, 2)
+        set_row_min(row)
         row += 1
 
         # ---- Числовые поля ----
         grid.addWidget(self._lbl("Повторов загрузки картинки"), row, 0)
-        self.retries = QSpinBox()
+        self.retries = self._field_h(QSpinBox())
         self.retries.setRange(1, 10)
-        self.retries.setMinimumHeight(FIELD_HEIGHT)
-        self.retries.setFixedWidth(140)
+        self.retries.setMinimumWidth(120)
+        self.retries.setMaximumWidth(180)
+        self.retries.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         grid.addWidget(self.retries, row, 1, Qt.AlignLeft)
+        set_row_min(row)
         row += 1
 
         grid.addWidget(self._lbl("Таймаут навигации"), row, 0)
-        self.nav_timeout = QSpinBox()
+        self.nav_timeout = self._field_h(QSpinBox())
         self.nav_timeout.setRange(5000, 180000)
         self.nav_timeout.setSingleStep(1000)
         self.nav_timeout.setSuffix(" мс")
-        self.nav_timeout.setMinimumHeight(FIELD_HEIGHT)
-        self.nav_timeout.setFixedWidth(160)
+        self.nav_timeout.setMinimumWidth(140)
+        self.nav_timeout.setMaximumWidth(200)
+        self.nav_timeout.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         grid.addWidget(self.nav_timeout, row, 1, Qt.AlignLeft)
+        set_row_min(row)
         row += 1
 
         grid.addWidget(self._lbl("Таймаут загрузки картинки"), row, 0)
-        self.dl_timeout = QSpinBox()
+        self.dl_timeout = self._field_h(QSpinBox())
         self.dl_timeout.setRange(5000, 300000)
         self.dl_timeout.setSingleStep(1000)
         self.dl_timeout.setSuffix(" мс")
-        self.dl_timeout.setMinimumHeight(FIELD_HEIGHT)
-        self.dl_timeout.setFixedWidth(160)
+        self.dl_timeout.setMinimumWidth(140)
+        self.dl_timeout.setMaximumWidth(200)
+        self.dl_timeout.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         grid.addWidget(self.dl_timeout, row, 1, Qt.AlignLeft)
+        set_row_min(row)
         row += 1
 
         grid.addWidget(self._lbl("Лимит истории"), row, 0)
-        self.history_limit = QSpinBox()
+        self.history_limit = self._field_h(QSpinBox())
         self.history_limit.setRange(10, 2000)
         self.history_limit.setSingleStep(10)
-        self.history_limit.setMinimumHeight(FIELD_HEIGHT)
-        self.history_limit.setFixedWidth(140)
+        self.history_limit.setMinimumWidth(120)
+        self.history_limit.setMaximumWidth(180)
+        self.history_limit.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         grid.addWidget(self.history_limit, row, 1, Qt.AlignLeft)
+        set_row_min(row)
         row += 1
 
         card_layout.addLayout(grid)
         card_layout.addSpacing(20)
 
-        # ---- Кнопки ----
         save_row = QHBoxLayout()
         save_row.addStretch()
 
@@ -225,6 +263,33 @@ class SettingsPage(QWidget):
         card_layout.addLayout(save_row)
 
         layout.addWidget(card)
+
+        # ================= РАСПОЛОЖЕНИЕ ДАННЫХ =================
+        loc_card = QFrame()
+        loc_card.setObjectName("card")
+
+        ll = QVBoxLayout(loc_card)
+        ll.setContentsMargins(24, 20, 24, 20)
+        ll.setSpacing(12)
+
+        loc_title = QLabel("РАСПОЛОЖЕНИЕ ДАННЫХ")
+        loc_title.setObjectName("section")
+        ll.addWidget(loc_title)
+
+        self.loc_label = QLabel("")
+        self.loc_label.setObjectName("muted")
+        self.loc_label.setWordWrap(True)
+        self.loc_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        ll.addWidget(self.loc_label)
+
+        loc_row = QHBoxLayout()
+        self.loc_move_btn = self._btn("Переместить в %APPDATA%/PLANA_DP", min_w=340)
+        self.loc_move_btn.clicked.connect(self._move_data_dir)
+        loc_row.addWidget(self.loc_move_btn)
+        loc_row.addStretch()
+        ll.addLayout(loc_row)
+
+        layout.addWidget(loc_card)
 
         # ================= ОБНОВЛЕНИЯ =================
         upd_card = QFrame()
@@ -286,9 +351,11 @@ class SettingsPage(QWidget):
         row2 = QHBoxLayout()
 
         self.un_dl_check = QCheckBox("Удалить папку загрузок")
+        self.un_dl_check.setMinimumHeight(ROW_MIN_HEIGHT)
         row2.addWidget(self.un_dl_check)
 
         self.un_app_check = QCheckBox("Удалить папку приложения (если .exe)")
+        self.un_app_check.setMinimumHeight(ROW_MIN_HEIGHT)
         self.un_app_check.setChecked(True)
         row2.addWidget(self.un_app_check)
 
@@ -308,62 +375,9 @@ class SettingsPage(QWidget):
 
         layout.addWidget(danger_card)
 
-        # ================= ЛОГИ =================
-        log_card = QFrame()
-        log_card.setObjectName("card")
+        layout.addStretch()
 
-        log_layout = QVBoxLayout(log_card)
-        log_layout.setContentsMargins(24, 20, 24, 20)
-        log_layout.setSpacing(12)
-
-        log_header = QHBoxLayout()
-        log_header_title = QLabel("ЛОГИ ПРИЛОЖЕНИЯ")
-        log_header_title.setObjectName("section")
-        log_header.addWidget(log_header_title)
-        log_header.addStretch()
-
-        self.toggle_log_btn = self._btn("Показать", min_w=130)
-        self.toggle_log_btn.clicked.connect(self._toggle_log)
-        log_header.addWidget(self.toggle_log_btn)
-
-        log_layout.addLayout(log_header)
-
-        self.log_container = QWidget()
-        log_container_layout = QVBoxLayout(self.log_container)
-        log_container_layout.setContentsMargins(0, 0, 0, 0)
-        log_container_layout.setSpacing(8)
-
-        controls = QHBoxLayout()
-        self.filter_check = QCheckBox("Скрыть технический шум (JS/сеть)")
-        self.filter_check.setChecked(True)
-        self.filter_check.stateChanged.connect(self._refresh_log_view)
-        controls.addWidget(self.filter_check)
-        controls.addStretch()
-
-        clear_btn = self._btn("Очистить", min_w=120)
-        clear_btn.clicked.connect(app_logger.clear)
-        controls.addWidget(clear_btn)
-
-        export_btn = self._btn("Сохранить в файл...", min_w=190)
-        export_btn.clicked.connect(self._export_log)
-        controls.addWidget(export_btn)
-
-        log_container_layout.addLayout(controls)
-
-        self.log_view = QPlainTextEdit()
-        self.log_view.setReadOnly(True)
-        self.log_view.setLineWrapMode(QPlainTextEdit.NoWrap)
-        self.log_view.setStyleSheet(
-            "font-family: Consolas, 'Courier New', monospace;font-size: 12px;"
-        )
-        log_container_layout.addWidget(self.log_view, 1)
-
-        log_layout.addWidget(self.log_container, 1)
-        self.log_container.setVisible(False)
-
-        layout.addWidget(log_card, 1)
-
-        self._refresh_log_view()
+        self._refresh_location()
 
     # =========================================================
     # SETTINGS
@@ -378,6 +392,7 @@ class SettingsPage(QWidget):
         self.delete_chapters.setChecked(
             bool(s.get("delete_chapters_with_history", False))
         )
+        self.show_logs.setChecked(bool(s.get("show_logs_section", False)))
         self.retries.setValue(int(s["image_retries"]))
         self.nav_timeout.setValue(int(s["navigation_timeout"]))
         self.dl_timeout.setValue(int(s["download_timeout"]))
@@ -390,6 +405,7 @@ class SettingsPage(QWidget):
         s["headless"] = self.headless.isChecked()
         s["use_cache"] = self.use_cache.isChecked()
         s["delete_chapters_with_history"] = self.delete_chapters.isChecked()
+        s["show_logs_section"] = self.show_logs.isChecked()
         s["image_retries"] = int(self.retries.value())
         s["navigation_timeout"] = int(self.nav_timeout.value())
         s["download_timeout"] = int(self.dl_timeout.value())
@@ -397,7 +413,11 @@ class SettingsPage(QWidget):
 
         save_settings(s)
         self.settings_saved.emit()
+        app_logger.write("Настройки сохранены.")
         QMessageBox.information(self, "Настройки", "Сохранено.")
+
+    def _on_show_logs_changed(self, _state):
+        self.logs_visibility_changed.emit(self.show_logs.isChecked())
 
     def _reset_settings(self):
         answer = QMessageBox.question(
@@ -411,6 +431,69 @@ class SettingsPage(QWidget):
         save_settings(get_default_settings())
         self.load()
         self.settings_saved.emit()
+        self.logs_visibility_changed.emit(self.show_logs.isChecked())
+        app_logger.write("Настройки сброшены к умолчанию.")
+
+    # =========================================================
+    # LOCATION
+    # =========================================================
+
+    def _refresh_location(self):
+        try:
+            current = get_data_dir()
+            target = default_data_dir()
+        except Exception:
+            self.loc_label.setText("Не удалось определить путь данных.")
+            self.loc_move_btn.setVisible(False)
+            return
+
+        in_std = is_in_user_config(current)
+
+        if in_std:
+            self.loc_label.setText(
+                f"Данные в стандартной папке:\n{current}\n\nПеремещение не требуется."
+            )
+            self.loc_move_btn.setVisible(False)
+        else:
+            self.loc_label.setText(
+                f"Текущая папка данных:\n{current}\n\n"
+                f"Стандартная папка:\n{target}\n\n"
+                "Рекомендуется переместить данные в стандартную папку —\n"
+                "это нужно для корректной работы обновлений и деинсталлятора."
+            )
+            self.loc_move_btn.setVisible(True)
+
+    def _move_data_dir(self):
+        answer = QMessageBox.question(
+            self,
+            "Перемещение данных",
+            "Переместить данные приложения в стандартную папку?\n\n"
+            "Приложение будет перезапущено.",
+        )
+        if answer != QMessageBox.Yes:
+            return
+
+        if not migrate_data_dir_to_default():
+            QMessageBox.warning(
+                self,
+                "Ошибка",
+                "Не удалось переместить данные.\nПроверьте права доступа к папкам.",
+            )
+            return
+
+        QMessageBox.information(
+            self,
+            "Готово",
+            "Данные перемещены. Приложение будет перезапущено.",
+        )
+
+        import sys
+        from PySide6.QtCore import QProcess
+
+        QProcess.startDetached(sys.executable, sys.argv)
+        app = QApplication.instance()
+        if app is not None:
+            app.quit()
 
     # =========================================================
     # HELPERS
@@ -674,56 +757,6 @@ class SettingsPage(QWidget):
         if not ok:
             return
 
-        from PySide6.QtWidgets import QApplication
-
         app = QApplication.instance()
         if app is not None:
             app.quit()
-
-    # =========================================================
-    # LOGS
-    # =========================================================
-
-    def _toggle_log(self):
-        self._log_visible = not self._log_visible
-        self.log_container.setVisible(self._log_visible)
-        self.toggle_log_btn.setText("Скрыть" if self._log_visible else "Показать")
-        if self._log_visible:
-            self._refresh_log_view()
-
-    def _should_show(self, line):
-        if not self.filter_check.isChecked():
-            return True
-        return not line.startswith(NOISY_PREFIXES)
-
-    def _refresh_log_view(self):
-        lines = [ln for ln in app_logger.lines() if self._should_show(ln)]
-        self.log_view.setPlainText("\n".join(lines))
-        sb = self.log_view.verticalScrollBar()
-        sb.setValue(sb.maximum())
-
-    def _on_log_line(self, line):
-        if not self._log_visible:
-            return
-        if not self._should_show(line):
-            return
-        self.log_view.appendPlainText(line)
-        sb = self.log_view.verticalScrollBar()
-        sb.setValue(sb.maximum())
-
-    def _on_log_cleared(self):
-        self.log_view.clear()
-
-    def _export_log(self):
-        path, _ = QFileDialog.getSaveFileName(
-            self,
-            "Сохранить лог",
-            "app.log",
-            "Log files (*.log *.txt);;All files (*)",
-        )
-        if not path:
-            return
-        if app_logger.export(path):
-            QMessageBox.information(self, "Логи", "Файл сохранён.")
-        else:
-            QMessageBox.warning(self, "Логи", "Не удалось сохранить файл.")

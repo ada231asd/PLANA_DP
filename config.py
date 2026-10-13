@@ -1,7 +1,7 @@
 from paths import get_static_dir
 
 APP_NAME = "PLANA_DP"
-APP_VERSION = "1.0.0"
+APP_VERSION = "1.0.1"
 
 GITHUB_REPO = "ada231asd/PLANA_DP"
 

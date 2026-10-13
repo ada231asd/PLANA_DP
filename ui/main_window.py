@@ -14,12 +14,14 @@ from PySide6.QtWidgets import (
 )
 
 from config import APP_NAME, APP_VERSION, LOGO_JPG
-from logger import app_logger
+from logger import app_logger, delete_log_file
+from storage import load_settings
 
 from ui.overlay import LoadingOverlay
 from ui.pages.search_page import SearchPage
 from ui.pages.history_page import HistoryPage
 from ui.pages.settings_page import SettingsPage
+from ui.pages.logs_page import LogsPage
 
 
 class MainWindow(QMainWindow):
@@ -28,7 +30,7 @@ class MainWindow(QMainWindow):
 
         self.setWindowTitle(f"{APP_NAME} {APP_VERSION}")
         self.resize(1280, 840)
-        self.setMinimumSize(1100, 720)
+        self.setMinimumSize(980, 640)
 
         if LOGO_JPG.exists():
             self.setWindowIcon(QIcon(str(LOGO_JPG)))
@@ -42,7 +44,14 @@ class MainWindow(QMainWindow):
         self.search_page.loading_finished.connect(self.overlay.hide_overlay)
         self.history_page.open_manga.connect(self._open_manga_from_history)
 
-        app_logger.message.connect(self._on_log_line)
+        self.settings_page.logs_visibility_changed.connect(
+            self._on_logs_visibility_changed
+        )
+
+        self._apply_logs_visibility(
+            bool(load_settings().get("show_logs_section", False))
+        )
+
         app_logger.write("Приложение запущено.")
 
     # =========================================================
@@ -61,7 +70,9 @@ class MainWindow(QMainWindow):
         # ---- SIDEBAR ----
         sidebar = QFrame()
         sidebar.setObjectName("sidebar")
-        sidebar.setFixedWidth(230)
+        sidebar.setMinimumWidth(210)
+        sidebar.setMaximumWidth(260)
+        sidebar.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
 
         side = QVBoxLayout(sidebar)
         side.setContentsMargins(20, 26, 20, 20)
@@ -118,14 +129,19 @@ class MainWindow(QMainWindow):
         self.btn_search = self._nav_button("🔍   Поиск")
         self.btn_history = self._nav_button("📚   История")
         self.btn_settings = self._nav_button("⚙   Настройки")
+        self.btn_logs = self._nav_button("📋   Логи")
 
         self.nav_group.addButton(self.btn_search, 0)
         self.nav_group.addButton(self.btn_history, 1)
         self.nav_group.addButton(self.btn_settings, 2)
+        self.nav_group.addButton(self.btn_logs, 3)
 
         side.addWidget(self.btn_search)
         side.addWidget(self.btn_history)
         side.addWidget(self.btn_settings)
+        side.addWidget(self.btn_logs)
+
+        self.btn_logs.setVisible(False)
 
         side.addStretch()
 
@@ -142,18 +158,18 @@ class MainWindow(QMainWindow):
         self.search_page = SearchPage()
         self.history_page = HistoryPage()
         self.settings_page = SettingsPage()
+        self.logs_page = LogsPage()
 
-        self.stack.addWidget(self.search_page)
-        self.stack.addWidget(self.history_page)
-        self.stack.addWidget(self.settings_page)
+        self.stack.addWidget(self.search_page)  # 0
+        self.stack.addWidget(self.history_page)  # 1
+        self.stack.addWidget(self.settings_page)  # 2
+        self.stack.addWidget(self.logs_page)  # 3
 
         self.nav_group.idClicked.connect(self._on_nav_clicked)
         self.btn_search.setChecked(True)
 
         self.search_page.manga_loaded.connect(self._on_manga_loaded)
         self.settings_page.settings_saved.connect(self._on_settings_saved)
-
-        self.statusBar().showMessage("Готов к работе")
 
     def _nav_button(self, text):
         btn = QPushButton(text)
@@ -169,10 +185,30 @@ class MainWindow(QMainWindow):
             self.overlay.setGeometry(self.centralWidget().rect())
 
     # =========================================================
+    # LOGS VISIBILITY
+    # =========================================================
+
+    def _apply_logs_visibility(self, visible):
+        self.btn_logs.setVisible(bool(visible))
+
+        if not visible and self.stack.currentIndex() == 3:
+            self.stack.setCurrentIndex(0)
+            self.btn_search.setChecked(True)
+
+    def _on_logs_visibility_changed(self, visible):
+        self._apply_logs_visibility(visible)
+        app_logger.write("Раздел логов " + ("включён" if visible else "скрыт"))
+
+    # =========================================================
     # SLOTS
     # =========================================================
 
     def _on_nav_clicked(self, index):
+        if index == 3 and not self.btn_logs.isVisible():
+            self.btn_search.setChecked(True)
+            self.stack.setCurrentIndex(0)
+            return
+
         self.stack.setCurrentIndex(index)
         if index == 1:
             self.history_page.refresh()
@@ -193,11 +229,7 @@ class MainWindow(QMainWindow):
         self.search_page.open_url(url)
 
     def _on_settings_saved(self):
-        self.statusBar().showMessage("Настройки сохранены")
-
-    def _on_log_line(self, line):
-        short = line if len(line) <= 120 else line[:117] + "..."
-        self.statusBar().showMessage(short)
+        app_logger.write("Настройки сохранены.")
 
     # =========================================================
     # CLOSE
@@ -208,4 +240,11 @@ class MainWindow(QMainWindow):
             self.search_page.shutdown()
         except Exception:
             pass
+
+        # удаляем файл лога при выходе
+        try:
+            delete_log_file()
+        except Exception:
+            pass
+
         event.accept()

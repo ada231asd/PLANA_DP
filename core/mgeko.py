@@ -572,13 +572,64 @@ class MgekoClient:
         return enriched
 
     # ==========================================================
+    # ALL CHAPTERS
+    # ==========================================================
+
+    def _find_all_chapters_url(self, soup, base_url):
+        """
+        Ищет ссылку на полный список глав.
+
+        Приоритет:
+          1) <a> с текстом 'Load All Chapters' / 'all chapters' (главный критерий)
+          2) #library-push
+          3) a[href*='/all-chapters/']
+        """
+        candidates = []
+
+        # 1) По тексту — самый надёжный вариант
+        for a in soup.find_all("a", href=True):
+            text = self._clean(a.get_text(" ", strip=True)).lower()
+            if "load all chapters" in text or "all chapters" in text:
+                candidates.append(("text='Load All Chapters'", a.get("href", "")))
+                break
+
+        # 2) #library-push
+        node = soup.select_one("#library-push")
+        if node is not None:
+            candidates.append(("id=#library-push", node.get("href", "")))
+
+        # 3) a[href*='/all-chapters/']
+        node = soup.select_one("a[href*='/all-chapters/']")
+        if node is not None:
+            candidates.append(("a[href*='/all-chapters/']", node.get("href", "")))
+
+        if not candidates:
+            self.log(
+                "Не нашёл ссылку на полный список глав "
+                "ни по тексту, ни по id, ни по href."
+            )
+            return None
+
+        for source, href in candidates:
+            if not href:
+                self.log(f"Кандидат ({source}) без href — пропускаю.")
+                continue
+            absolute = urljoin(base_url, href.strip())
+            if "/all-chapters/" in absolute:
+                self.log(f"Найден all-chapters через {source}: {absolute}")
+                return absolute
+            self.log(f"Кандидат ({source}) не содержит /all-chapters/: {absolute}")
+
+        return None
+
+    # ==========================================================
     # MANGA
     # ==========================================================
 
     def get_manga(self, url):
         self._goto(
             url,
-            wait_for=".chapter-list-item, .novel-title",
+            wait_for=".chapter-list-item, ul.chapter-list > li, .chapter-list li, .novel-title, #library-push",
             timeout_selector=8000,
         )
         self._save_debug_page("manga_page")
@@ -608,21 +659,26 @@ class MgekoClient:
         self.log(f"Название: {title}")
         self.log(f"Автор: {author}")
         self.log(f"Статус: {status}")
-        self.log(f"Глав найдено: {len(chapters)}")
-        all_link = soup.select_one("#library-push[href]")
-        if all_link:
-            all_url = urljoin(MGEKO_BASE, all_link.get("href", ""))
-            if "/all-chapters/" in all_url:
-                try:
-                    self.log("Открываю полный список глав:")
-                    self.log(all_url)
-                    self._goto(all_url, wait_for=".chapter-list-item")
-                    all_soup = BeautifulSoup(self.page.content(), "html.parser")
-                    all_chapters = self._parse_chapters(all_soup)
-                    self.log(f"В полном списке найдено: {len(all_chapters)}")
-                    chapters = self._merge_chapters(chapters, all_chapters)
-                except Exception as exc:
-                    self.log("Не удалось загрузить полный список глав: " + str(exc))
+        self.log(f"Глав найдено на основной странице: {len(chapters)}")
+
+        # ---- ALL CHAPTERS ----
+        all_url = self._find_all_chapters_url(soup, url)
+        if all_url:
+            try:
+                self.log("Открываю полный список глав:")
+                self.log(all_url)
+                self._goto(
+                    all_url,
+                    wait_for=".chapter-list-item, ul.chapter-list > li, .chapter-list li",
+                )
+                all_soup = BeautifulSoup(self.page.content(), "html.parser")
+                all_chapters = self._parse_chapters(all_soup)
+                self.log(f"В полном списке найдено: {len(all_chapters)}")
+                chapters = self._merge_chapters(chapters, all_chapters)
+                self.log(f"После объединения: {len(chapters)}")
+            except Exception as exc:
+                self.log("Не удалось загрузить полный список глав: " + str(exc))
+
         return Manga(
             title=title,
             url=url,
@@ -651,8 +707,16 @@ class MgekoClient:
     def _parse_chapters(self, soup):
         chapters = []
         seen = set()
+
+        # разные варианты разметки: .chapter-list-item и ul.chapter-list > li
         nodes = soup.select(".chapter-list-item")
-        self.log(f"Элементов .chapter-list-item: {len(nodes)}")
+        if not nodes:
+            nodes = soup.select("ul.chapter-list > li")
+        if not nodes:
+            nodes = soup.select(".chapter-list li")
+
+        self.log(f"Элементов списка глав: {len(nodes)}")
+
         for node in nodes:
             a = node.select_one("a[href]")
             if not a:
@@ -699,7 +763,6 @@ class MgekoClient:
                     order=order,
                 )
             )
-            self.log(f"Глава {number}: {chapter_url}")
         chapters.sort(key=lambda c: (c.order, c.number), reverse=True)
         return chapters
 

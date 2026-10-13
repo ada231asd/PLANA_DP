@@ -1,4 +1,7 @@
 STYLE = """
+/* ============================================================
+   БАЗА
+   ============================================================ */
 QMainWindow, QWidget#root {
     background: #0e0f13;
     color: #e6e6ee;
@@ -6,7 +9,9 @@ QMainWindow, QWidget#root {
     font-size: 14px;
 }
 
-/* Sidebar */
+/* ============================================================
+   SIDEBAR
+   ============================================================ */
 QFrame#sidebar {
     background: #12131a;
     border-right: 1px solid #1f2230;
@@ -52,17 +57,20 @@ QPushButton#nav:checked {
     border-left: 3px solid #8e63d9;
 }
 
-/* Inputs */
-QLineEdit, QTextEdit, QListWidget, QComboBox, QSpinBox {
+/* ============================================================
+   INPUTS
+   ============================================================ */
+QLineEdit, QTextEdit, QPlainTextEdit, QListWidget,
+QComboBox, QSpinBox {
     background: #14161f;
     border: 1px solid #242736;
     border-radius: 8px;
-    padding: 4px 10px;
+    padding: 6px 12px;
     color: #f0f0f5;
-    min-height: 26px;
     selection-background-color: #4a3a7a;
 }
-QLineEdit:focus, QTextEdit:focus, QComboBox:focus, QSpinBox:focus {
+QLineEdit:focus, QTextEdit:focus, QPlainTextEdit:focus,
+QComboBox:focus, QSpinBox:focus {
     border: 1px solid #8e63d9;
 }
 
@@ -70,7 +78,6 @@ QLineEdit:focus, QTextEdit:focus, QComboBox:focus, QSpinBox:focus {
 QSpinBox {
     padding-right: 26px;
 }
-
 QSpinBox::up-button, QSpinBox::down-button {
     subcontrol-origin: border;
     width: 22px;
@@ -137,14 +144,15 @@ QComboBox QAbstractItemView {
     outline: none;
 }
 
-/* Buttons */
+/* ============================================================
+   BUTTONS
+   ============================================================ */
 QPushButton {
     background: #1c1f2b;
     border: 1px solid #2a2e3d;
     border-radius: 8px;
-    padding: 7px 14px;
+    padding: 8px 16px;
     color: #e6e6ee;
-    min-height: 22px;
 }
 QPushButton:hover { background: #242838; }
 QPushButton:pressed { background: #1a1d28; }
@@ -166,6 +174,9 @@ QPushButton:disabled {
     border-color: #1f2230;
 }
 
+/* ============================================================
+   CARDS / LABELS
+   ============================================================ */
 QFrame#card {
     background: #12141c;
     border: 1px solid #1f2230;
@@ -182,9 +193,12 @@ QLabel#muted {
     background: transparent;
 }
 
+/* ============================================================
+   CHECKBOX / RADIO
+   ============================================================ */
 QCheckBox {
     color: #e6e6ee;
-    spacing: 8px;
+    spacing: 10px;
     background: transparent;
 }
 QCheckBox::indicator {
@@ -219,6 +233,9 @@ QRadioButton::indicator:checked {
     border-color: #8e63d9;
 }
 
+/* ============================================================
+   LIST
+   ============================================================ */
 QListWidget {
     outline: none;
 }
@@ -231,6 +248,9 @@ QListWidget::item:selected {
     color: #ffffff;
 }
 
+/* ============================================================
+   PROGRESS
+   ============================================================ */
 QProgressBar {
     background: #14161f;
     border: 1px solid #242736;
@@ -246,6 +266,9 @@ QProgressBar::chunk {
     border-radius: 5px;
 }
 
+/* ============================================================
+   SCROLLBARS
+   ============================================================ */
 QScrollBar:vertical {
     background: transparent;
     width: 10px;
@@ -269,6 +292,20 @@ QScrollBar::handle:horizontal {
 }
 QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0; }
 
+/* ============================================================
+   SCROLL AREA
+   ============================================================ */
+QScrollArea {
+    background: transparent;
+    border: none;
+}
+QScrollArea > QWidget > QWidget {
+    background: transparent;
+}
+
+/* ============================================================
+   MISC
+   ============================================================ */
 QStatusBar {
     background: #0e0f13;
     color: #8b8f9e;
@@ -284,5 +321,96 @@ QToolTip {
     border: 1px solid #2a2e3d;
     padding: 4px 6px;
     border-radius: 6px;
+}
+
+/* ============================================================
+   ГЛОБАЛЬНАЯ ЗАЩИТА ОТ СВЕТЛОЙ СИСТЕМНОЙ ТЕМЫ
+   Эти правила должны идти В КОНЦЕ, чтобы работать как fallback.
+   ============================================================ */
+
+/* Базовый цвет текста для всех виджетов */
+QWidget {
+    color: #e6e6ee;
+}
+
+/* Область скролла и её viewport не должны быть белыми */
+QScrollArea,
+QScrollArea > QWidget,
+QScrollArea > QWidget > QWidget,
+QAbstractScrollArea {
+    background: transparent;
+    color: #e6e6ee;
+}
+
+/* Списки / деревья */
+QListView, QListView::item,
+QTreeView, QTreeView::item,
+QTableView {
+    color: #f0f0f5;
+    background: #14161f;
+}
+QHeaderView::section {
+    background: #1a1c26;
+    color: #e6e6ee;
+    border: none;
+    padding: 6px 10px;
+}
+
+/* ============================================================
+   QFileDialog — нативные диалоги на Windows не подхватывают QSS,
+   но в Fusion-режиме это уже не нативные диалоги, а Qt-овские.
+   На всякий случай — раскраска.
+   ============================================================ */
+QFileDialog {
+    background: #12141c;
+    color: #e6e6ee;
+}
+QFileDialog QLabel,
+QFileDialog QLineEdit,
+QFileDialog QComboBox {
+    color: #f0f0f5;
+    background: #14161f;
+}
+QFileDialog QTreeView,
+QFileDialog QListView {
+    background: #14161f;
+    color: #f0f0f5;
+}
+QFileDialog QPushButton {
+    background: #1c1f2b;
+    border: 1px solid #2a2e3d;
+    color: #e6e6ee;
+}
+QFileDialog QPushButton:hover {
+    background: #242838;
+}
+
+/* ============================================================
+   QDialog — общий фон
+   ============================================================ */
+QDialog {
+    background: #0e0f13;
+    color: #e6e6ee;
+}
+
+/* ============================================================
+   QTabWidget / QTabBar (на случай появления вкладок в диалогах)
+   ============================================================ */
+QTabWidget::pane {
+    background: #12141c;
+    border: 1px solid #1f2230;
+    border-radius: 8px;
+}
+QTabBar::tab {
+    background: #1c1f2b;
+    color: #a4a7b6;
+    padding: 6px 14px;
+    border-top-left-radius: 6px;
+    border-top-right-radius: 6px;
+    margin-right: 2px;
+}
+QTabBar::tab:selected {
+    background: #241b3a;
+    color: #c5a4ff;
 }
 """

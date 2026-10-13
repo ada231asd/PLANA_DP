@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QProgressBar,
     QPushButton,
+    QSizePolicy,
     QTextEdit,
     QVBoxLayout,
     QWidget,
@@ -46,6 +47,8 @@ class SearchPage(QWidget):
         self.current_manga = None
         self._history_emitted = False
         self._loading_active = False
+        self._cache_refresh_active = False
+        self._network_result_received = False
 
         # перевод
         self._translated = False
@@ -106,21 +109,18 @@ class SearchPage(QWidget):
 
         self.clear_search_btn = QPushButton("✕")
         self.clear_search_btn.setToolTip("Очистить поиск и текущий тайтл")
-        self.clear_search_btn.setFixedWidth(40)
-        self.clear_search_btn.setMinimumHeight(34)
+        self.clear_search_btn.setMinimumWidth(40)
         self.clear_search_btn.setCursor(Qt.PointingHandCursor)
         self.clear_search_btn.clicked.connect(self.clear_search)
         search_row.addWidget(self.clear_search_btn)
 
         self.search_button = QPushButton("Найти")
         self.search_button.setObjectName("primary")
-        self.search_button.setMinimumHeight(34)
+        self.search_button.setCursor(Qt.PointingHandCursor)
         self.search_button.clicked.connect(self.search)
         search_row.addWidget(self.search_button)
 
-        # Кнопка перевода — только если включена в config
         self.translate_button = QPushButton("🌐  Перевести")
-        self.translate_button.setMinimumHeight(34)
         self.translate_button.setCursor(Qt.PointingHandCursor)
         self.translate_button.clicked.connect(self.toggle_translate)
         self.translate_button.setEnabled(False)
@@ -135,34 +135,46 @@ class SearchPage(QWidget):
         info_card.setObjectName("card")
 
         info_layout = QHBoxLayout(info_card)
-        info_layout.setContentsMargins(18, 18, 18, 18)
-        info_layout.setSpacing(18)
+        info_layout.setContentsMargins(22, 22, 22, 22)
+        info_layout.setSpacing(22)
 
+        # ---- Cover ----
         self.cover = QLabel("Обложка")
         self.cover.setAlignment(Qt.AlignCenter)
-        self.cover.setFixedSize(180, 255)
+        self.cover.setMinimumSize(160, 225)
+        self.cover.setMaximumSize(200, 285)
+        self.cover.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         self.cover.setStyleSheet(
             "background:#191b26;border-radius:10px;color:#555970;"
             "font-size:12px;letter-spacing:1px;"
         )
-        info_layout.addWidget(self.cover)
+        info_layout.addWidget(self.cover, 0, Qt.AlignTop)
 
+        # ---- Details ----
         details = QVBoxLayout()
-        details.setSpacing(8)
+        details.setSpacing(10)
+        details.setContentsMargins(0, 0, 0, 0)
 
         self.manga_title = QLabel("Начните поиск")
         self.manga_title.setObjectName("title")
         self.manga_title.setWordWrap(True)
+        self.manga_title.setTextInteractionFlags(Qt.TextSelectableByMouse)
         details.addWidget(self.manga_title)
 
         self.meta = QLabel("")
         self.meta.setObjectName("muted")
         self.meta.setWordWrap(True)
+        self.meta.setTextFormat(Qt.RichText)
+        self.meta.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.meta.setStyleSheet("font-size: 13px;")
         details.addWidget(self.meta)
+
+        details.addSpacing(6)
 
         self.description = QTextEdit()
         self.description.setReadOnly(True)
-        self.description.setMinimumHeight(120)
+        self.description.setMinimumHeight(140)
+        self.description.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         details.addWidget(self.description, 1)
 
         info_layout.addLayout(details, 1)
@@ -177,8 +189,8 @@ class SearchPage(QWidget):
         chapter_card.setObjectName("card")
 
         ch_layout = QVBoxLayout(chapter_card)
-        ch_layout.setContentsMargins(14, 14, 14, 14)
-        ch_layout.setSpacing(10)
+        ch_layout.setContentsMargins(16, 16, 16, 16)
+        ch_layout.setSpacing(12)
 
         ch_header = QHBoxLayout()
         ch_title = QLabel("ГЛАВЫ")
@@ -187,13 +199,11 @@ class SearchPage(QWidget):
         ch_header.addStretch()
 
         self.select_all_button = QPushButton("Выбрать все")
-        self.select_all_button.setMinimumHeight(34)
         self.select_all_button.setCursor(Qt.PointingHandCursor)
         self.select_all_button.clicked.connect(self.select_all)
         ch_header.addWidget(self.select_all_button)
 
         self.clear_button = QPushButton("Снять все")
-        self.clear_button.setMinimumHeight(34)
         self.clear_button.setCursor(Qt.PointingHandCursor)
         self.clear_button.clicked.connect(self.clear_all)
         ch_header.addWidget(self.clear_button)
@@ -211,8 +221,8 @@ class SearchPage(QWidget):
         dl_card.setObjectName("card")
 
         dl_layout = QVBoxLayout(dl_card)
-        dl_layout.setContentsMargins(14, 14, 14, 14)
-        dl_layout.setSpacing(10)
+        dl_layout.setContentsMargins(16, 16, 16, 16)
+        dl_layout.setSpacing(12)
 
         dl_title = QLabel("ЗАГРУЗКА")
         dl_title.setObjectName("section")
@@ -233,7 +243,6 @@ class SearchPage(QWidget):
         self.download_gif = QLabel()
         self.download_gif.setAlignment(Qt.AlignCenter)
         self.download_gif.setVisible(False)
-        self.download_gif.setFixedHeight(140)
 
         if Path(GIF_DOWNLOAD).exists():
             self._gif_movie = QMovie(str(GIF_DOWNLOAD))
@@ -247,7 +256,6 @@ class SearchPage(QWidget):
 
         self.download_button = QPushButton("Скачать выбранные")
         self.download_button.setObjectName("primary")
-        self.download_button.setMinimumHeight(36)
         self.download_button.setCursor(Qt.PointingHandCursor)
         self.download_button.clicked.connect(self.download_selected)
         self.download_button.setEnabled(False)
@@ -368,64 +376,70 @@ class SearchPage(QWidget):
             app_logger.write("Предыдущая загрузка тайтла ещё идёт...")
             return
 
-        self._show_loading("Загрузка тайтла")
-
         settings = load_settings()
 
-        # КЕШ
+        cached = None
+        cached_loaded = False
+
         if settings.get("use_cache", True) and not force_refresh:
             cached = get_cached_manga(url)
-            if cached:
-                self.current_manga = manga_from_cache_dict(cached)
-                self._history_emitted = False
-                self._reset_translate_state()
 
-                app_logger.write(
-                    f"Тайтл из кеша: {self.current_manga.title} "
-                    f"(обновлён: {cached.get('cached_at', '?')})"
-                )
+        if cached:
+            self.current_manga = manga_from_cache_dict(cached)
+            self._history_emitted = False
+            self._reset_translate_state()
 
-                self.show_manga(self.current_manga)
+            app_logger.write(
+                f"Тайтл из кеша: {self.current_manga.title} "
+                f"(обновлён: {cached.get('cached_at', '?')})"
+            )
 
-                cover_path = cached.get("_cover_path") or ""
-                if cover_path and Path(cover_path).exists():
-                    try:
-                        data = Path(cover_path).read_bytes()
-                        pixmap = QPixmap()
-                        if pixmap.loadFromData(data):
-                            self.cover.setPixmap(
-                                pixmap.scaled(
-                                    self.cover.size(),
-                                    Qt.KeepAspectRatio,
-                                    Qt.SmoothTransformation,
-                                )
+            self.show_manga(self.current_manga)
+            cached_loaded = True
+
+            cover_path = cached.get("_cover_path") or ""
+            if cover_path and Path(cover_path).exists():
+                try:
+                    data = Path(cover_path).read_bytes()
+                    pixmap = QPixmap()
+                    if pixmap.loadFromData(data):
+                        self.cover.setPixmap(
+                            pixmap.scaled(
+                                self.cover.size(),
+                                Qt.KeepAspectRatio,
+                                Qt.SmoothTransformation,
                             )
-                        if not self._history_emitted:
-                            self._history_emitted = True
-                            self.manga_loaded.emit(self.current_manga, data)
-                    except Exception as exc:
-                        app_logger.write(
-                            f"[WARN] не удалось прочитать кеш обложки: {exc}"
                         )
-                        if not self._history_emitted:
-                            self._history_emitted = True
-                            self.manga_loaded.emit(self.current_manga, b"")
-                else:
+                    if not self._history_emitted:
+                        self._history_emitted = True
+                        self.manga_loaded.emit(self.current_manga, data)
+                except Exception as exc:
+                    app_logger.write(f"[WARN] не удалось прочитать кеш обложки: {exc}")
                     if not self._history_emitted:
                         self._history_emitted = True
                         self.manga_loaded.emit(self.current_manga, b"")
+            else:
+                if not self._history_emitted:
+                    self._history_emitted = True
+                    self.manga_loaded.emit(self.current_manga, b"")
 
-                self._hide_loading()
-                return
+            self._hide_loading()
 
-        # СЕТЬ
-        self.current_manga = None
-        self._history_emitted = False
-        self._reset_translate_state()
-        self._reset_display()
-        self.manga_title.setText("Загрузка...")
+        if not cached_loaded:
+            self._show_loading("Загрузка тайтла")
+            self.current_manga = None
+            self._history_emitted = False
+            self._reset_translate_state()
+            self._reset_display()
+            self.manga_title.setText("Загрузка...")
 
-        app_logger.write(f"Открываю тайтл (сеть): {url}")
+        self._cache_refresh_active = cached_loaded
+        self._network_result_received = False
+
+        if cached_loaded:
+            app_logger.write(f"Обновляю тайтл из кеша с сайта: {url}")
+        else:
+            app_logger.write(f"Открываю тайтл (сеть): {url}")
 
         self.manga_thread = QThread()
         self.manga_worker = MangaWorker(url)
@@ -433,7 +447,7 @@ class SearchPage(QWidget):
 
         self.manga_thread.started.connect(self.manga_worker.run)
 
-        self.manga_worker.result.connect(self.show_manga)
+        self.manga_worker.result.connect(self._on_network_manga_result)
         self.manga_worker.cover.connect(self._on_cover_received)
         self.manga_worker.log.connect(app_logger.write)
         self.manga_worker.error.connect(self._on_manga_error)
@@ -445,20 +459,27 @@ class SearchPage(QWidget):
 
         self.manga_thread.start()
 
+    def _on_network_manga_result(self, manga):
+        self._network_result_received = True
+        self._cache_refresh_active = False
+        self.show_manga(manga)
+
     def _manga_thread_done(self):
         self.manga_thread = None
         self.manga_worker = None
 
-        if self.current_manga is not None:
+        if self._network_result_received and self.current_manga is not None:
             try:
                 save_cached_manga(self.current_manga, None)
-            except Exception:
-                pass
+            except Exception as exc:
+                app_logger.write(f"[WARN] не удалось обновить кеш тайтла: {exc}")
 
             if not self._history_emitted:
                 self._history_emitted = True
                 self.manga_loaded.emit(self.current_manga, b"")
 
+        self._network_result_received = False
+        self._cache_refresh_active = False
         self._hide_loading()
 
     def _on_cover_received(self, data, from_cache=False):
@@ -487,6 +508,13 @@ class SearchPage(QWidget):
 
     def _on_manga_error(self, message):
         app_logger.write(f"[ERROR] {message}")
+
+        if self._cache_refresh_active:
+            app_logger.write("Не удалось обновить тайтл. Оставляю сохранённые данные.")
+            self._cache_refresh_active = False
+            self._hide_loading()
+            return
+
         self._hide_loading()
         QMessageBox.critical(self, "Ошибка", message)
 
@@ -494,25 +522,33 @@ class SearchPage(QWidget):
     # SHOW MANGA
     # =========================================================
 
+    def _build_meta_html(self, manga):
+        rows = []
+
+        def esc(s):
+            return (
+                str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+            )
+
+        if manga.author:
+            rows.append(f"<b>Автор:</b> {esc(manga.author)}")
+        if manga.status:
+            rows.append(f"<b>Статус:</b> {esc(manga.status)}")
+        if manga.views:
+            rows.append(f"<b>Просмотры:</b> {esc(manga.views)}")
+        if manga.bookmarks:
+            rows.append(f"<b>Закладки:</b> {esc(manga.bookmarks)}")
+        if manga.genres:
+            rows.append(f"<b>Жанры:</b> {esc(', '.join(manga.genres))}")
+        if manga.alternative_title:
+            rows.append(f"<b>Альтернативное:</b> {esc(manga.alternative_title)}")
+
+        return "<br>".join(rows) if rows else ""
+
     def show_manga(self, manga):
         self.current_manga = manga
         self.manga_title.setText(manga.title)
-
-        parts = []
-        if manga.author:
-            parts.append(f"Автор: {manga.author}")
-        if manga.status:
-            parts.append(f"Статус: {manga.status}")
-        if manga.views:
-            parts.append(f"Просмотры: {manga.views}")
-        if manga.bookmarks:
-            parts.append(f"Закладки: {manga.bookmarks}")
-        if manga.genres:
-            parts.append("Жанры: " + ", ".join(manga.genres))
-        if manga.alternative_title:
-            parts.append("Альтернативное: " + manga.alternative_title)
-
-        self.meta.setText("\n".join(parts))
+        self.meta.setText(self._build_meta_html(manga))
         self.description.setPlainText(manga.description or "Описание отсутствует.")
 
         self.chapters.clear()
@@ -595,23 +631,33 @@ class SearchPage(QWidget):
     def _on_translate_done(self, translated):
         try:
             title = translated.get("title") or self.current_manga.title
-
-            parts = []
-            if translated.get("author"):
-                parts.append(f"Автор: {translated['author']}")
-            if translated.get("status"):
-                parts.append(f"Статус: {translated['status']}")
-            if self.current_manga.views:
-                parts.append(f"Просмотры: {self.current_manga.views}")
-            if self.current_manga.bookmarks:
-                parts.append(f"Закладки: {self.current_manga.bookmarks}")
-            if translated.get("genres"):
-                parts.append("Жанры: " + ", ".join(translated["genres"]))
-            if translated.get("alternative_title"):
-                parts.append("Альтернативное: " + translated["alternative_title"])
-
             self.manga_title.setText(title)
-            self.meta.setText("\n".join(parts))
+
+            if self.current_manga:
+                # временно подменяем поля и строим HTML
+                old_author = self.current_manga.author
+                old_status = self.current_manga.status
+                old_genres = list(self.current_manga.genres or [])
+                old_alt = self.current_manga.alternative_title
+
+                if translated.get("author"):
+                    self.current_manga.author = translated["author"]
+                if translated.get("status"):
+                    self.current_manga.status = translated["status"]
+                if translated.get("genres"):
+                    self.current_manga.genres = translated["genres"]
+                if translated.get("alternative_title"):
+                    self.current_manga.alternative_title = translated[
+                        "alternative_title"
+                    ]
+
+                self.meta.setText(self._build_meta_html(self.current_manga))
+
+                self.current_manga.author = old_author
+                self.current_manga.status = old_status
+                self.current_manga.genres = old_genres
+                self.current_manga.alternative_title = old_alt
+
             self.description.setPlainText(
                 translated.get("description")
                 or self.current_manga.description

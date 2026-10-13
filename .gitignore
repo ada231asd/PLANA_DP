@@ -55,3 +55,4 @@ static/logo.ico
 push_to_github.py
 cleanup.py
 project_map.txt
+map.py

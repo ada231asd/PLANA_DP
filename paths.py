@@ -1,5 +1,6 @@
 import json
 import os
+import shutil
 import sys
 from pathlib import Path
 
@@ -82,3 +83,72 @@ def get_static_dir():
         base = Path(getattr(sys, "_MEIPASS", app_root()))
         return base / "static"
     return app_root() / "static"
+
+
+# ============================================================
+# DATA LOCATION / MIGRATION
+# ============================================================
+
+
+def is_in_user_config(path) -> bool:
+    """True, если путь находится внутри %APPDATA%/PLANA_DP (или аналога)."""
+    try:
+        p = Path(path).resolve()
+        root = _user_config_root().resolve()
+        return root == p or root in p.parents
+    except Exception:
+        return False
+
+
+def migrate_data_dir_to_default() -> bool:
+    """
+    Переносит содержимое текущего data_dir в default_data_dir().
+    Обновляет bootstrap.json (data_dir и, при необходимости, download_dir).
+    Возвращает True при успехе.
+    """
+    try:
+        current = get_data_dir().resolve()
+        target = default_data_dir().resolve()
+
+        if current == target:
+            return True
+
+        target.mkdir(parents=True, exist_ok=True)
+
+        for item in current.iterdir():
+            dest = target / item.name
+            if dest.exists():
+                # не перезаписываем — вдруг там уже что-то есть
+                continue
+            try:
+                shutil.move(str(item), str(dest))
+            except Exception:
+                # если move не сработал (cross-device), пробуем copy+rm
+                if item.is_dir():
+                    shutil.copytree(item, dest)
+                    shutil.rmtree(item, ignore_errors=True)
+                else:
+                    shutil.copy2(item, dest)
+                    try:
+                        item.unlink()
+                    except Exception:
+                        pass
+
+        boot = load_bootstrap() or {}
+        boot["data_dir"] = str(target)
+
+        # если download_dir лежал внутри старого data_dir — переносим путь
+        old_dl = boot.get("download_dir")
+        if old_dl:
+            try:
+                old_dl_path = Path(old_dl).resolve()
+                if current == old_dl_path or current in old_dl_path.parents:
+                    rel = old_dl_path.relative_to(current)
+                    boot["download_dir"] = str(target / rel)
+            except Exception:
+                pass
+
+        save_bootstrap(boot)
+        return True
+    except Exception:
+        return False

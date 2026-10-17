@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QUrl, QThread, Signal
+from PySide6.QtCore import Qt, QUrl, QThread, Signal, Slot
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QApplication,
@@ -38,7 +38,7 @@ from paths import (
     migrate_data_dir_to_default,
 )
 
-from workers.update_worker import UpdateWorker, DownloadWorker
+from workers.update_worker import UpdateWorker, ApplyUpdateWorker
 from workers.uninstall_worker import UninstallWorker
 
 
@@ -57,6 +57,7 @@ class SettingsPage(QWidget):
         self._update_worker = None
         self._dl_thread = None
         self._dl_worker = None
+        self._update_progress = None
         self._uninstall_thread = None
         self._uninstall_worker = None
 
@@ -510,7 +511,7 @@ class SettingsPage(QWidget):
             QDesktopServices.openUrl(QUrl.fromLocalFile(path))
 
     # =========================================================
-    # UPDATES
+    # UPDATES — CHECK
     # =========================================================
 
     def _check_updates(self):
@@ -622,64 +623,95 @@ class SettingsPage(QWidget):
                         "Открыл страницу релиза — скачайте вручную.",
                     )
 
+    # =========================================================
+    # UPDATES — APPLY
+    # =========================================================
+
     def _download_update(self, info):
+        if self._dl_thread is not None and self._dl_thread.isRunning():
+            QMessageBox.information(self, "Обновление", "Загрузка уже идёт.")
+            return
+
         asset_url = info.get("asset_url") or ""
         asset_name = info.get("asset_name") or ""
 
-        progress = QProgressDialog(
+        self._update_progress = QProgressDialog(
             "Загрузка обновления...",
             "Отмена",
             0,
             100,
             self,
         )
-        progress.setWindowTitle("Обновление")
-        progress.setWindowModality(Qt.WindowModal)
-        progress.setMinimumDuration(0)
-        progress.setValue(0)
+        self._update_progress.setWindowTitle("Обновление")
+        self._update_progress.setWindowModality(Qt.WindowModal)
+        self._update_progress.setMinimumDuration(0)
+        self._update_progress.setValue(0)
 
         self._dl_thread = QThread()
-        self._dl_worker = DownloadWorker(asset_url, asset_name)
+        self._dl_worker = ApplyUpdateWorker(asset_url, asset_name)
         self._dl_worker.moveToThread(self._dl_thread)
 
-        def on_progress(done, total):
-            if total > 0:
-                progress.setValue(int(done / total * 100))
-            else:
-                progress.setValue(0)
-
-        def on_result(path):
-            progress.close()
-            QMessageBox.information(
-                self,
-                "Обновление",
-                f"Файл сохранён в:\n{path}\n\n"
-                f"Закройте PLANA_DP, замените файлы и запустите заново.",
-            )
-            QDesktopServices.openUrl(QUrl.fromLocalFile(str(Path(path).parent)))
-
-        def on_error(msg):
-            progress.close()
-            QMessageBox.warning(self, "Обновление", msg)
-
         self._dl_thread.started.connect(self._dl_worker.run)
-        self._dl_worker.progress.connect(on_progress)
-        self._dl_worker.result.connect(on_result)
-        self._dl_worker.error.connect(on_error)
+
+        # bound-методы с @Slot → QueuedConnection → выполняются в главном потоке
+        self._dl_worker.progress.connect(self._on_update_progress)
+        self._dl_worker.error.connect(self._on_update_download_error)
         self._dl_worker.log.connect(app_logger.write)
+        self._dl_worker.ready.connect(self._on_update_ready)
 
         self._dl_worker.finished.connect(self._dl_thread.quit)
         self._dl_worker.finished.connect(self._dl_worker.deleteLater)
         self._dl_thread.finished.connect(self._dl_thread.deleteLater)
         self._dl_thread.finished.connect(self._dl_thread_done)
 
-        progress.canceled.connect(self._dl_thread.quit)
+        # «Отмена» прерывает загрузку между чанками
+        self._update_progress.canceled.connect(self._dl_worker.stop)
 
         self._dl_thread.start()
+
+    @Slot(int, int)
+    def _on_update_progress(self, done, total):
+        if self._update_progress is None:
+            return
+        if total > 0:
+            self._update_progress.setValue(int(done / total * 100))
+        else:
+            self._update_progress.setValue(0)
+
+    @Slot()
+    def _on_update_ready(self):
+        """Файлы скачаны, .bat запущен — показываем сообщение и закрываемся."""
+        if self._update_progress is not None:
+            self._update_progress.close()
+            self._update_progress = None
+
+        QMessageBox.information(
+            self,
+            "Обновление",
+            "Новая версия скачана.\n\n"
+            "Приложение сейчас закроется, файлы заменятся автоматически, "
+            "и PLANA_DP запустится заново.\n\n"
+            "Не запускайте приложение вручную, пока обновление не завершится.",
+        )
+        QApplication.quit()
+
+    @Slot(str)
+    def _on_update_download_error(self, msg):
+        if self._update_progress is not None:
+            self._update_progress.close()
+            self._update_progress = None
+
+        app_logger.write(f"[ERROR] автообновление: {msg}")
+        QMessageBox.warning(self, "Обновление", msg)
 
     def _dl_thread_done(self):
         self._dl_thread = None
         self._dl_worker = None
+        # если пользователь нажал «Отмена» — слоты result/error не вызовутся,
+        # поэтому закрываем диалог здесь
+        if self._update_progress is not None:
+            self._update_progress.close()
+            self._update_progress = None
 
     # =========================================================
     # WIPE / UNINSTALL
@@ -739,9 +771,7 @@ class SettingsPage(QWidget):
         self._uninstall_thread.started.connect(self._uninstall_worker.run)
 
         self._uninstall_worker.log.connect(app_logger.write)
-        self._uninstall_worker.error.connect(
-            lambda msg: QMessageBox.warning(self, "Деинсталлятор", msg)
-        )
+        self._uninstall_worker.error.connect(self._on_uninstall_error)
         self._uninstall_worker.finished.connect(self._on_uninstall_ready)
 
         self._uninstall_worker.finished.connect(self._uninstall_thread.quit)
@@ -749,6 +779,11 @@ class SettingsPage(QWidget):
         self._uninstall_thread.finished.connect(self._uninstall_thread.deleteLater)
 
         self._uninstall_thread.start()
+
+    @Slot(str)
+    def _on_uninstall_error(self, msg):
+        app_logger.write(f"[ERROR] деинсталлятор: {msg}")
+        QMessageBox.warning(self, "Деинсталлятор", msg)
 
     def _on_uninstall_ready(self, ok):
         self._uninstall_thread = None

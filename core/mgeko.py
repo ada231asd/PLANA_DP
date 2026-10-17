@@ -62,7 +62,12 @@ class MgekoClient:
         )
         self.context.set_default_timeout(nav_timeout)
 
+        # Блокируем только известные рекламные сети из разметки Mgeko.
+        # CDN с изображениями манхвы не затрагиваем.
+        self.context.route("**/*", self._route_request)
+
         self.page = self.context.new_page()
+        self.context.on("page", self._on_new_page)
 
         self.page.on(
             "console",
@@ -81,6 +86,37 @@ class MgekoClient:
         self.page.on("response", self._on_response)
 
         self.log("Браузер запущен.")
+
+    _AD_HOSTS = (
+        "pubadx.one",
+        "onclckinpg.com",
+        "onclckbnr.com",
+    )
+
+    def _route_request(self, route):
+        """Отсекает известные рекламные домены, не блокируя CDN изображений."""
+        try:
+            host = (urlparse(route.request.url).hostname or "").lower()
+            if any(
+                host == domain or host.endswith("." + domain)
+                for domain in self._AD_HOSTS
+            ):
+                self.log(f"[AD BLOCK] {host}")
+                route.abort()
+                return
+        except Exception as exc:
+            self.log(f"Не удалось проверить запрос на рекламу: {exc}")
+        route.continue_()
+
+    def _on_new_page(self, page):
+        """Закрывает рекламные вкладки, открытые сайтом, не трогая основную страницу."""
+        if page is self.page:
+            return
+        try:
+            self.log(f"[POPUP BLOCK] Закрываю дополнительную вкладку: {page.url}")
+            page.close()
+        except Exception as exc:
+            self.log(f"Не удалось закрыть дополнительную вкладку: {exc}")
 
     def _on_response(self, response):
         url = response.url
@@ -780,51 +816,110 @@ class MgekoClient:
     # ==========================================================
 
     def get_chapter_images(self, chapter_url):
+        """Находит страницы главы в старой и новой разметке Mgeko."""
+        image_selector = (
+            "img[id^='image-'], "
+            "img[src*='/sv2/comic/'], img[data-src*='/sv2/comic/'], "
+            "img[src*='cdn_mangaraw'], img[data-src*='cdn_mangaraw'], "
+            "img[data-lazy-src*='cdn_mangaraw']"
+        )
         self._goto(
             chapter_url,
-            wait_for="img[src*='/sv2/comic/'], img[data-src*='/sv2/comic/']",
-            timeout_selector=10000,
+            wait_for=image_selector,
+            timeout_selector=15000,
         )
         self._save_debug_page("chapter_page")
         self.save_debug_screenshot("chapter_page")
+
+        # Сначала читаем DOM после JS, затем парсим сохранённый HTML.
+        try:
+            self.page.wait_for_function(
+                r"""() => Array.from(document.images).some(img => {
+                    const id = img.id || '';
+                    const src = [img.currentSrc, img.src, img.getAttribute('data-src'),
+                                 img.getAttribute('data-lazy-src')].filter(Boolean).join(' ');
+                    return /^image-\d+$/i.test(id) ||
+                           /\/sv2\/comic\/|cdn_mangaraw/i.test(src);
+                })""",
+                timeout=5000,
+            )
+        except Exception:
+            pass
+
         soup = BeautifulSoup(self.page.content(), "html.parser")
         images = []
         seen = set()
+
         for img in soup.select("img"):
-            src = (
-                img.get("data-src") or img.get("data-lazy-src") or img.get("src") or ""
-            ).strip()
-            if not src:
+            image_id = (img.get("id") or "").strip()
+            id_match = re.search(r"^image-(\d+)$", image_id, re.IGNORECASE)
+
+            # Учитываем разные варианты lazy-load, а также srcset.
+            values = [
+                img.get("data-src"),
+                img.get("data-lazy-src"),
+                img.get("data-original"),
+                img.get("data-original-src"),
+                img.get("src"),
+            ]
+            srcset = img.get("data-srcset") or img.get("srcset") or ""
+            if srcset:
+                for entry in srcset.split(","):
+                    candidate = entry.strip().split()[0] if entry.strip() else ""
+                    if candidate:
+                        values.append(candidate)
+
+            chosen = ""
+            fallback = ""
+            for value in values:
+                value = (value or "").strip()
+                if not value or value.startswith("data:"):
+                    continue
+                absolute = urljoin(chapter_url, value)
+                low = absolute.lower()
+                if "credits-mgeko.png" in low:
+                    continue
+                # Сначала предпочитаем явный путь CDN страницы манхвы.
+                if "/sv2/comic/" in low or "cdn_mangaraw" in low:
+                    chosen = absolute
+                    break
+                if id_match and not fallback:
+                    fallback = absolute
+            if not chosen and id_match:
+                chosen = fallback
+            if not chosen:
                 continue
-            absolute = urljoin(chapter_url, src)
-            low = absolute.lower()
-            if "credits-mgeko.png" in low or "/sv2/comic/" not in low:
+
+            low = chosen.lower()
+            if any(host in low for host in self._AD_HOSTS):
                 continue
-            image_id = img.get("id", "")
-            match = re.search(r"image-(\d+)$", image_id)
-            numeric = int(match.group(1)) if match else 999999
-            if absolute in seen:
+            if chosen in seen:
                 continue
-            seen.add(absolute)
-            images.append((numeric, absolute))
+            seen.add(chosen)
+
+            if id_match:
+                numeric = int(id_match.group(1))
+            else:
+                filename = urlparse(chosen).path.rsplit("/", 1)[-1]
+                number_match = re.search(
+                    r"(?:^|[-_])(\d+)(?:\.[a-z0-9]+)?$", filename, re.IGNORECASE
+                )
+                numeric = int(number_match.group(1)) if number_match else 999999
+            images.append((numeric, chosen))
+
+        # Если id отсутствуют и номера URL одинаковые/неизвестные, сохраняем DOM-порядок.
         images.sort(key=lambda item: item[0])
-        if not images:
-            self.log("Основной поиск изображений ничего не нашёл.")
-            for img in soup.select(
-                "img[src*='/sv2/comic/'], img[data-src*='/sv2/comic/']"
-            ):
-                src = (img.get("data-src") or img.get("src") or "").strip()
-                if not src or "credits-mgeko.png" in src.lower():
-                    continue
-                absolute = urljoin(chapter_url, src)
-                if absolute in seen:
-                    continue
-                seen.add(absolute)
-                images.append((len(images) + 1, absolute))
         result = [url for _, url in images]
-        self.log(f"Найдено изображений: {len(result)}")
+
+        self.log(f"Найдено изображений главы: {len(result)}")
         for index, image_url in enumerate(result, start=1):
             self.log(f"{index:03d}: {image_url}")
+
+        if not result:
+            self.log(
+                "Изображения не найдены. Проверьте chapter_page.html: "
+                "возможно, сайт изменил CDN или требует дополнительной загрузки JavaScript."
+            )
         return result
 
     # ==========================================================

@@ -1,11 +1,17 @@
 import json
+import os
+import subprocess
+import sys
+import tempfile
 import urllib.error
 import urllib.request
+import zipfile
 from pathlib import Path
 
 from PySide6.QtCore import QObject, Signal, Slot
 
 from config import APP_VERSION, GITHUB_REPO
+from paths import app_root, is_frozen
 
 
 API_LATEST = "https://api.github.com/repos/{repo}/releases/latest"
@@ -140,70 +146,285 @@ class UpdateWorker(QObject):
             self.finished.emit()
 
 
-class DownloadWorker(QObject):
+class ApplyUpdateWorker(QObject):
     """
-    Скачивает файл обновления в папку Downloads пользователя.
-    progress: (downloaded_bytes, total_bytes)
-    result: str (путь к скачанному файлу)
+    Автообновление: скачивает релиз, готовит .bat, запускает его,
+    приложение закрывается — .bat заменяет файлы на диске и
+    перезапускает PLANA_DP с того же места.
+
+    Поддерживает два типа сборки (определяется автоматически):
+      - onefile  — рядом с .exe нет папки _internal
+      - folder   — рядом с .exe есть _internal
+
+    Signals:
+      progress(int, int) — (скачано байт, всего байт)
+      log(str)           — сообщение в лог
+      error(str)         — ошибка
+      ready()            — файлы готовы, .bat запущен, можно закрывать приложение
+      finished()         — воркер завершил работу
     """
 
     progress = Signal(int, int)
-    result = Signal(str)
-    error = Signal(str)
     log = Signal(str)
+    error = Signal(str)
+    ready = Signal()
     finished = Signal()
 
-    def __init__(self, url, filename=""):
+    def __init__(self, asset_url, asset_name=""):
         super().__init__()
-        self.url = url
-        self.filename = filename
+        self.asset_url = asset_url
+        self.asset_name = asset_name
+        self._stop = False
+
+    @Slot()
+    def stop(self):
+        self._stop = True
 
     @Slot()
     def run(self):
         try:
-            if not self.url:
-                self.error.emit("URL файла обновления пуст.")
-                self.finished.emit()
+            if not is_frozen():
+                self.error.emit(
+                    "Приложение запущено из исходников (python main.py).\n"
+                    "Автообновление работает только для .exe-сборки."
+                )
                 return
 
-            downloads = Path.home() / "Downloads"
-            downloads.mkdir(parents=True, exist_ok=True)
+            if not sys.platform.startswith("win"):
+                self.error.emit("Автообновление поддерживается только на Windows.")
+                return
 
-            fname = (
-                self.filename
-                or self.url.rstrip("/").split("/")[-1]
+            if not self.asset_url:
+                self.error.emit("URL файла обновления пуст.")
+                return
+
+            app_dir = app_root()
+            exe_path = Path(sys.executable).resolve()
+            exe_name = exe_path.name
+            pid = os.getpid()
+            is_folder_build = (app_dir / "_internal").is_dir()
+
+            self.log.emit(
+                f"Режим обновления: {'folder' if is_folder_build else 'onefile'}"
+            )
+            self.log.emit(f"Папка приложения: {app_dir}")
+
+            tmp_dir = Path(tempfile.mkdtemp(prefix="plana_update_"))
+            self.log.emit(f"Временная папка: {tmp_dir}")
+
+            # ---------- 1. Скачать ----------
+            filename = (
+                self.asset_name
+                or self.asset_url.rstrip("/").split("/")[-1]
                 or "PLANA_DP_update"
             )
-            target = downloads / fname
+            archive = tmp_dir / filename
 
-            self.log.emit(f"Скачиваю обновление: {self.url}")
+            if not self._download(archive):
+                # отменено пользователем
+                self._cleanup(tmp_dir)
+                return
 
-            req = urllib.request.Request(
-                self.url,
-                headers={"User-Agent": "PLANA_DP-Updater"},
+            # ---------- 2. Подготовить источник ----------
+            source, source_is_folder = self._prepare_source(archive, tmp_dir, exe_name)
+            self.log.emit(
+                f"Источник: {source} ({'папка' if source_is_folder else 'файл'})"
             )
-            with urllib.request.urlopen(req, timeout=120) as resp:
-                total = int(resp.headers.get("Content-Length") or 0)
-                downloaded = 0
-                chunk_size = 64 * 1024
 
-                with open(target, "wb") as fp:
-                    while True:
-                        chunk = resp.read(chunk_size)
-                        if not chunk:
-                            break
-                        fp.write(chunk)
-                        downloaded += len(chunk)
-                        try:
-                            self.progress.emit(downloaded, total)
-                        except Exception:
-                            pass
+            if is_folder_build and not source_is_folder:
+                self.error.emit(
+                    "Установлена folder-сборка, а в обновлении только .exe.\n"
+                    "Прикрепите к релизу .zip с содержимым папки dist/PLANA_DP/."
+                )
+                self._cleanup(tmp_dir)
+                return
 
-            self.log.emit(f"Сохранено: {target}")
-            self.result.emit(str(target))
+            if not is_folder_build and source_is_folder:
+                # onefile-сборка, а в zip — папка: извлекаем только .exe
+                candidate = source / exe_name
+                if not candidate.exists():
+                    exes = list(source.rglob("*.exe"))
+                    if not exes:
+                        self.error.emit("В архиве не найден .exe.")
+                        self._cleanup(tmp_dir)
+                        return
+                    candidate = exes[0]
+                source = candidate
+                source_is_folder = False
+                self.log.emit(f"Извлекаю только .exe: {source}")
+
+            # ---------- 3. Сгенерировать .bat ----------
+            bat = self._build_bat(
+                tmp_dir, source, source_is_folder, app_dir, exe_path, pid
+            )
+            self.log.emit(f"Скрипт обновления: {bat}")
+
+            # ---------- 4. Запустить .bat ----------
+            subprocess.Popen(
+                ["cmd", "/c", str(bat)],
+                creationflags=subprocess.CREATE_NEW_CONSOLE,
+                close_fds=True,
+            )
+
+            self.log.emit("Скрипт запущен, приложение может закрываться.")
+            self.ready.emit()
 
         except Exception as exc:
-            self.error.emit(f"Ошибка загрузки: {exc}")
+            self.error.emit(f"Ошибка автообновления: {exc}")
 
         finally:
             self.finished.emit()
+
+    # =========================================================
+    # DOWNLOAD
+    # =========================================================
+
+    def _download(self, target):
+        self.log.emit(f"Скачиваю: {self.asset_url}")
+        req = urllib.request.Request(
+            self.asset_url,
+            headers={"User-Agent": "PLANA_DP-Updater"},
+        )
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            total = int(resp.headers.get("Content-Length") or 0)
+            done = 0
+            with open(target, "wb") as fp:
+                while True:
+                    if self._stop:
+                        self.log.emit("Загрузка отменена пользователем.")
+                        try:
+                            if target.exists():
+                                target.unlink()
+                        except Exception:
+                            pass
+                        return False
+                    chunk = resp.read(64 * 1024)
+                    if not chunk:
+                        break
+                    fp.write(chunk)
+                    done += len(chunk)
+                    self.progress.emit(done, total)
+        return True
+
+    # =========================================================
+    # SOURCE PREPARATION
+    # =========================================================
+
+    def _prepare_source(self, archive, tmp_dir, exe_name):
+        """
+        Возвращает (source_path, source_is_folder).
+        Если архив содержит _internal — это folder-сборка.
+        Иначе — ищем .exe (onefile).
+        """
+        suffix = archive.suffix.lower()
+
+        if suffix == ".zip":
+            extract = tmp_dir / "new"
+            extract.mkdir()
+            self.log.emit("Распаковываю архив...")
+            with zipfile.ZipFile(archive) as z:
+                z.extractall(extract)
+
+            internal_dirs = list(extract.rglob("_internal"))
+            if internal_dirs:
+                folder_root = internal_dirs[0].parent
+                self.log.emit(f"Folder-сборка найдена: {folder_root}")
+                return folder_root, True
+
+            exes = list(extract.rglob("*.exe"))
+            if not exes:
+                raise RuntimeError("В архиве не найден ни _internal, ни .exe-файл.")
+            # если несколько exe — берём тот, что совпадает по имени, иначе первый
+            chosen = next(
+                (p for p in exes if p.name == exe_name),
+                exes[0],
+            )
+            return chosen, False
+
+        if suffix == ".exe":
+            return archive, False
+
+        raise RuntimeError(f"Неподдерживаемый формат файла обновления: {suffix}")
+
+    # =========================================================
+    # BAT GENERATION
+    # =========================================================
+
+    def _build_bat(self, tmp_dir, source, source_is_folder, app_dir, exe_path, pid):
+        lines = [
+            "@echo off",
+            "chcp 65001 >nul",
+            "title PLANA_DP Updater",
+            "echo.",
+            "echo Обновление PLANA_DP...",
+            "echo.",
+            "",
+            "REM даём приложению шанс закрыться штатно",
+            "timeout /t 2 /nobreak >nul",
+            "",
+            "REM ждём завершения процесса по PID (до 30 секунд)",
+            "set /a waited=0",
+            ":waitloop",
+            f'tasklist /FI "PID eq {pid}" 2>nul | find /I "{exe_path.name}" >nul',
+            "if errorlevel 1 goto after_wait",
+            "timeout /t 1 /nobreak >nul",
+            "set /a waited+=1",
+            "if %waited% LSS 30 goto waitloop",
+            "echo Приложение не закрылось за 30 секунд — завершаю принудительно.",
+            f"taskkill /F /PID {pid} >nul 2>&1",
+            "timeout /t 2 /nobreak >nul",
+            "",
+            ":after_wait",
+        ]
+
+        if source_is_folder:
+            # folder build: полная перезапись содержимого
+            lines += [
+                f'robocopy "{source}" "{app_dir}" /E /IS /IT /NFL /NDL /NJH /NJS /NC /NS >nul',
+                "if errorlevel 8 goto fail",
+            ]
+        else:
+            # onefile: заменяем только .exe
+            lines += [
+                f'copy /Y "{source}" "{exe_path}" >nul',
+                "if errorlevel 1 goto fail",
+            ]
+
+        lines += [
+            "",
+            "REM запускаем новую версию с того же места",
+            f'start "" "{exe_path}"',
+            "",
+            "REM самоудаление",
+            'del /F /Q "%~f0" >nul 2>&1',
+            "exit /b 0",
+            "",
+            ":fail",
+            "echo.",
+            "echo ОШИБКА: не удалось заменить файлы.",
+            "echo Возможные причины:",
+            "echo   - нет прав на запись в папку приложения",
+            "echo   - антивирус блокирует замену",
+            "echo   - файл всё ещё занят другим процессом",
+            "echo.",
+            "echo Старая версия осталась на месте.",
+            "pause",
+            "exit /b 1",
+        ]
+
+        bat = tmp_dir / "plana_update.bat"
+        bat.write_text("\r\n".join(lines), encoding="utf-8")
+        return bat
+
+    # =========================================================
+    # CLEANUP
+    # =========================================================
+
+    @staticmethod
+    def _cleanup(tmp_dir):
+        try:
+            import shutil
+
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+        except Exception:
+            pass

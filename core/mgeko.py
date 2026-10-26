@@ -7,7 +7,7 @@ from bs4 import BeautifulSoup
 from playwright.sync_api import sync_playwright
 
 from config import MGEKO_BASE, SEARCH_URL
-from paths import get_data_dir
+from paths import get_data_dir, is_chromium_browser
 from storage import load_settings
 from models import Manga, Chapter
 
@@ -37,19 +37,51 @@ class MgekoClient:
         browser_name = str(self.settings.get("browser", "firefox")).lower().strip()
         nav_timeout = int(self.settings.get("navigation_timeout", 45000))
 
+        browser_mode = str(self.settings.get("browser_mode", "bundled")).lower()
+        browser_exe = str(self.settings.get("browser_exe", "") or "").strip()
+
         self.log("Запускаю браузер...")
 
         self.pw = sync_playwright().start()
 
-        if browser_name == "firefox":
-            self.log("Браузер: Firefox")
-            self.browser = self.pw.firefox.launch(headless=headless)
-        else:
-            self.log("Браузер: Chromium")
-            self.browser = self.pw.chromium.launch(
-                headless=headless,
-                args=["--disable-blink-features=AutomationControlled"],
+        use_local = (
+            browser_mode == "local" and browser_exe and Path(browser_exe).exists()
+        )
+
+        if use_local:
+            exe_path = Path(browser_exe)
+            chromium_family = is_chromium_browser(browser_exe)
+            engine = "chromium" if chromium_family else "firefox"
+            self.log(f"Режим: локальный браузер ({exe_path.name})")
+            self.log(f"Движок Playwright: {engine}")
+            launcher = self.pw.chromium if engine == "chromium" else self.pw.firefox
+            launch_args = (
+                []
+                if engine == "firefox"
+                else [
+                    "--disable-blink-features=AutomationControlled",
+                ]
             )
+            self.browser = launcher.launch(
+                headless=headless,
+                executable_path=str(exe_path),
+                args=launch_args,
+            )
+        else:
+            if browser_mode == "local" and browser_exe:
+                self.log(
+                    f"Локальный браузер не найден по пути: {browser_exe}. "
+                    "Использую встроенный."
+                )
+            if browser_name == "firefox":
+                self.log("Браузер: Firefox (встроенный)")
+                self.browser = self.pw.firefox.launch(headless=headless)
+            else:
+                self.log("Браузер: Chromium (встроенный)")
+                self.browser = self.pw.chromium.launch(
+                    headless=headless,
+                    args=["--disable-blink-features=AutomationControlled"],
+                )
 
         self.context = self.browser.new_context(
             viewport={"width": 1440, "height": 1000},
@@ -62,8 +94,6 @@ class MgekoClient:
         )
         self.context.set_default_timeout(nav_timeout)
 
-        # Блокируем только известные рекламные сети из разметки Mgeko.
-        # CDN с изображениями манхвы не затрагиваем.
         self.context.route("**/*", self._route_request)
 
         self.page = self.context.new_page()
@@ -94,7 +124,6 @@ class MgekoClient:
     )
 
     def _route_request(self, route):
-        """Отсекает известные рекламные домены, не блокируя CDN изображений."""
         try:
             host = (urlparse(route.request.url).hostname or "").lower()
             if any(
@@ -109,7 +138,6 @@ class MgekoClient:
         route.continue_()
 
     def _on_new_page(self, page):
-        """Закрывает рекламные вкладки, открытые сайтом, не трогая основную страницу."""
         if page is self.page:
             return
         try:
@@ -612,29 +640,18 @@ class MgekoClient:
     # ==========================================================
 
     def _find_all_chapters_url(self, soup, base_url):
-        """
-        Ищет ссылку на полный список глав.
-
-        Приоритет:
-          1) <a> с текстом 'Load All Chapters' / 'all chapters' (главный критерий)
-          2) #library-push
-          3) a[href*='/all-chapters/']
-        """
         candidates = []
 
-        # 1) По тексту — самый надёжный вариант
         for a in soup.find_all("a", href=True):
             text = self._clean(a.get_text(" ", strip=True)).lower()
             if "load all chapters" in text or "all chapters" in text:
                 candidates.append(("text='Load All Chapters'", a.get("href", "")))
                 break
 
-        # 2) #library-push
         node = soup.select_one("#library-push")
         if node is not None:
             candidates.append(("id=#library-push", node.get("href", "")))
 
-        # 3) a[href*='/all-chapters/']
         node = soup.select_one("a[href*='/all-chapters/']")
         if node is not None:
             candidates.append(("a[href*='/all-chapters/']", node.get("href", "")))
@@ -697,7 +714,6 @@ class MgekoClient:
         self.log(f"Статус: {status}")
         self.log(f"Глав найдено на основной странице: {len(chapters)}")
 
-        # ---- ALL CHAPTERS ----
         all_url = self._find_all_chapters_url(soup, url)
         if all_url:
             try:
@@ -744,7 +760,6 @@ class MgekoClient:
         chapters = []
         seen = set()
 
-        # разные варианты разметки: .chapter-list-item и ul.chapter-list > li
         nodes = soup.select(".chapter-list-item")
         if not nodes:
             nodes = soup.select("ul.chapter-list > li")
@@ -816,7 +831,6 @@ class MgekoClient:
     # ==========================================================
 
     def get_chapter_images(self, chapter_url):
-        """Находит страницы главы в старой и новой разметке Mgeko."""
         image_selector = (
             "img[id^='image-'], "
             "img[src*='/sv2/comic/'], img[data-src*='/sv2/comic/'], "
@@ -831,7 +845,6 @@ class MgekoClient:
         self._save_debug_page("chapter_page")
         self.save_debug_screenshot("chapter_page")
 
-        # Сначала читаем DOM после JS, затем парсим сохранённый HTML.
         try:
             self.page.wait_for_function(
                 r"""() => Array.from(document.images).some(img => {
@@ -854,7 +867,6 @@ class MgekoClient:
             image_id = (img.get("id") or "").strip()
             id_match = re.search(r"^image-(\d+)$", image_id, re.IGNORECASE)
 
-            # Учитываем разные варианты lazy-load, а также srcset.
             values = [
                 img.get("data-src"),
                 img.get("data-lazy-src"),
@@ -879,7 +891,6 @@ class MgekoClient:
                 low = absolute.lower()
                 if "credits-mgeko.png" in low:
                     continue
-                # Сначала предпочитаем явный путь CDN страницы манхвы.
                 if "/sv2/comic/" in low or "cdn_mangaraw" in low:
                     chosen = absolute
                     break
@@ -907,7 +918,6 @@ class MgekoClient:
                 numeric = int(number_match.group(1)) if number_match else 999999
             images.append((numeric, chosen))
 
-        # Если id отсутствуют и номера URL одинаковые/неизвестные, сохраняем DOM-порядок.
         images.sort(key=lambda item: item[0])
         result = [url for _, url in images]
 

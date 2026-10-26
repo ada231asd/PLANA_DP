@@ -4,3 +4,4 @@ beautifulsoup4>=4.12
 deep-translator>=1.11
 pyinstaller>=6.10
 pillow>=10.0
+rapidocr-onnxruntime>=1.3

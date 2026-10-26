@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (
     QFrame,
     QGridLayout,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QMessageBox,
@@ -36,6 +37,8 @@ from paths import (
     default_data_dir,
     is_in_user_config,
     migrate_data_dir_to_default,
+    find_installed_browsers,
+    is_chromium_browser,
 )
 
 from workers.update_worker import UpdateWorker, ApplyUpdateWorker
@@ -44,6 +47,17 @@ from workers.uninstall_worker import UninstallWorker
 
 FIELD_HEIGHT = 34
 ROW_MIN_HEIGHT = 40
+
+_BROWSER_LABELS = {
+    "chrome": "Google Chrome",
+    "msedge": "Microsoft Edge",
+    "brave": "Brave",
+    "vivaldi": "Vivaldi",
+    "opera": "Opera",
+    "operagx": "Opera GX",
+    "firefox": "Mozilla Firefox",
+    "yandex": "Yandex Browser",
+}
 
 
 class SettingsPage(QWidget):
@@ -91,7 +105,6 @@ class SettingsPage(QWidget):
     # =========================================================
 
     def _build_ui(self):
-        # корневой layout: только scroll на всю страницу
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
@@ -107,7 +120,6 @@ class SettingsPage(QWidget):
 
         outer.addWidget(scroll)
 
-        # ---- содержимое страницы ----
         layout = QVBoxLayout(content)
         layout.setContentsMargins(28, 24, 28, 20)
         layout.setSpacing(16)
@@ -161,14 +173,55 @@ class SettingsPage(QWidget):
         set_row_min(row)
         row += 1
 
-        # ---- Браузер ----
-        grid.addWidget(self._lbl("Браузер"), row, 0)
+        # ---- Режим браузера ----
+        grid.addWidget(self._lbl("Режим браузера"), row, 0)
+        self.browser_mode = self._field_h(QComboBox())
+        self.browser_mode.addItem("Встроенный (Playwright)", "bundled")
+        self.browser_mode.addItem("Локальный браузер", "local")
+        self.browser_mode.setMinimumWidth(260)
+        self.browser_mode.setMaximumWidth(360)
+        self.browser_mode.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        self.browser_mode.currentIndexChanged.connect(self._on_browser_mode_changed)
+        grid.addWidget(self.browser_mode, row, 1, Qt.AlignLeft)
+        set_row_min(row)
+        row += 1
+
+        # ---- Встроенный движок ----
+        grid.addWidget(self._lbl("Встроенный движок"), row, 0)
         self.browser = self._field_h(QComboBox())
         self.browser.addItems(["firefox", "chromium"])
         self.browser.setMinimumWidth(200)
         self.browser.setMaximumWidth(320)
         self.browser.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
         grid.addWidget(self.browser, row, 1, Qt.AlignLeft)
+        set_row_min(row)
+        row += 1
+
+        # ---- Локальный браузер ----
+        grid.addWidget(self._lbl("Локальный браузер"), row, 0)
+
+        local_row = QHBoxLayout()
+        local_row.setContentsMargins(0, 0, 0, 0)
+        local_row.setSpacing(8)
+
+        self.browser_exe = self._field_h(QLineEdit())
+        self.browser_exe.setPlaceholderText(
+            "Путь к .exe (chrome.exe, firefox.exe, opera.exe ...)"
+        )
+        local_row.addWidget(self.browser_exe, 1)
+
+        self.btn_autofind = self._btn("Автопоиск", 110)
+        self.btn_autofind.clicked.connect(self._autofind_browser)
+        local_row.addWidget(self.btn_autofind)
+
+        self.btn_pick_exe = self._btn("Обзор...", 110)
+        self.btn_pick_exe.clicked.connect(self._pick_browser_exe)
+        local_row.addWidget(self.btn_pick_exe)
+
+        local_widget = QWidget()
+        local_widget.setLayout(local_row)
+        local_widget.setMinimumHeight(FIELD_HEIGHT)
+        grid.addWidget(local_widget, row, 1)
         set_row_min(row)
         row += 1
 
@@ -381,6 +434,64 @@ class SettingsPage(QWidget):
         self._refresh_location()
 
     # =========================================================
+    # BROWSER CONTROLS
+    # =========================================================
+
+    def _on_browser_mode_changed(self, _idx):
+        is_local = (self.browser_mode.currentData() or "bundled") == "local"
+        self.browser.setEnabled(not is_local)
+        self.browser_exe.setEnabled(is_local)
+        self.btn_autofind.setEnabled(is_local)
+        self.btn_pick_exe.setEnabled(is_local)
+
+    def _pick_browser_exe(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Выберите исполняемый файл браузера",
+            "",
+            "Executables (*.exe);;All files (*)",
+        )
+        if path:
+            self.browser_exe.setText(path)
+
+    def _autofind_browser(self):
+        found = find_installed_browsers()
+        if not found:
+            QMessageBox.information(
+                self,
+                "Автопоиск",
+                "Установленные браузеры не найдены.\n"
+                "Укажите путь к .exe вручную через «Обзор...».",
+            )
+            return
+
+        items = []
+        for key in sorted(found.keys()):
+            label = _BROWSER_LABELS.get(key, key)
+            items.append((f"{label} — {found[key]}", found[key]))
+
+        labels = [it[0] for it in items]
+        choice, ok = QInputDialog.getItem(
+            self,
+            "Автопоиск браузеров",
+            "Найденные браузеры:",
+            labels,
+            0,
+            False,
+        )
+        if not ok or not choice:
+            return
+
+        for label, path in items:
+            if label == choice:
+                self.browser_exe.setText(path)
+                chromium = is_chromium_browser(path)
+                app_logger.write(
+                    f"Автопоиск: {path} ({'Chromium' if chromium else 'Firefox'})"
+                )
+                break
+
+    # =========================================================
     # SETTINGS
     # =========================================================
 
@@ -388,6 +499,12 @@ class SettingsPage(QWidget):
         s = load_settings()
         self.download_dir.setText(s["download_dir"])
         self.browser.setCurrentText(s["browser"])
+
+        idx = self.browser_mode.findData(s.get("browser_mode", "bundled"))
+        self.browser_mode.setCurrentIndex(idx if idx >= 0 else 0)
+        self.browser_exe.setText(s.get("browser_exe", ""))
+        self._on_browser_mode_changed(0)
+
         self.headless.setChecked(bool(s["headless"]))
         self.use_cache.setChecked(bool(s.get("use_cache", True)))
         self.delete_chapters.setChecked(
@@ -401,8 +518,32 @@ class SettingsPage(QWidget):
 
     def save(self):
         s = load_settings()
+
+        mode = self.browser_mode.currentData() or "bundled"
+        exe = self.browser_exe.text().strip()
+
+        if mode == "local":
+            if not exe:
+                QMessageBox.warning(
+                    self,
+                    "Настройки",
+                    "Выбран режим «Локальный браузер», но путь к .exe пуст.\n"
+                    "Укажите браузер или переключитесь на встроенный.",
+                )
+                return
+            if not Path(exe).exists():
+                QMessageBox.warning(
+                    self,
+                    "Настройки",
+                    f"Файл браузера не найден:\n{exe}\n\n"
+                    "Проверьте путь или используйте «Автопоиск».",
+                )
+                return
+
         s["download_dir"] = self.download_dir.text().strip() or s["download_dir"]
         s["browser"] = self.browser.currentText()
+        s["browser_mode"] = mode
+        s["browser_exe"] = exe
         s["headless"] = self.headless.isChecked()
         s["use_cache"] = self.use_cache.isChecked()
         s["delete_chapters_with_history"] = self.delete_chapters.isChecked()
@@ -653,7 +794,6 @@ class SettingsPage(QWidget):
 
         self._dl_thread.started.connect(self._dl_worker.run)
 
-        # bound-методы с @Slot → QueuedConnection → выполняются в главном потоке
         self._dl_worker.progress.connect(self._on_update_progress)
         self._dl_worker.error.connect(self._on_update_download_error)
         self._dl_worker.log.connect(app_logger.write)
@@ -664,7 +804,6 @@ class SettingsPage(QWidget):
         self._dl_thread.finished.connect(self._dl_thread.deleteLater)
         self._dl_thread.finished.connect(self._dl_thread_done)
 
-        # «Отмена» прерывает загрузку между чанками
         self._update_progress.canceled.connect(self._dl_worker.stop)
 
         self._dl_thread.start()
@@ -680,7 +819,6 @@ class SettingsPage(QWidget):
 
     @Slot()
     def _on_update_ready(self):
-        """Файлы скачаны, .bat запущен — показываем сообщение и закрываемся."""
         if self._update_progress is not None:
             self._update_progress.close()
             self._update_progress = None
@@ -707,8 +845,6 @@ class SettingsPage(QWidget):
     def _dl_thread_done(self):
         self._dl_thread = None
         self._dl_worker = None
-        # если пользователь нажал «Отмена» — слоты result/error не вызовутся,
-        # поэтому закрываем диалог здесь
         if self._update_progress is not None:
             self._update_progress.close()
             self._update_progress = None

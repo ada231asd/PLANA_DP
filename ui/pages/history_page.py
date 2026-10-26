@@ -4,6 +4,7 @@ from PySide6.QtCore import Qt, QSize, QEvent, Signal
 from PySide6.QtGui import QIcon, QPixmap, QAction, QMovie
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QListWidget,
@@ -11,6 +12,7 @@ from PySide6.QtWidgets import (
     QMenu,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QVBoxLayout,
     QWidget,
 )
@@ -36,10 +38,25 @@ class HistoryPage(QWidget):
         self.refresh()
 
     def _build_ui(self):
-        layout = QVBoxLayout(self)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+
+        content = QWidget()
+        scroll.setWidget(content)
+        outer.addWidget(scroll)
+
+        layout = QVBoxLayout(content)
         layout.setContentsMargins(28, 24, 28, 20)
         layout.setSpacing(16)
 
+        # ---------- header ----------
         header = QHBoxLayout()
         title = QLabel("История")
         title.setObjectName("title")
@@ -61,34 +78,36 @@ class HistoryPage(QWidget):
 
         layout.addLayout(header)
 
-        # ----- Список -----
+        # ---------- карточка со списком ----------
+        card = QFrame()
+        card.setObjectName("card")
+        card_layout = QVBoxLayout(card)
+        card_layout.setContentsMargins(16, 16, 16, 16)
+        card_layout.setSpacing(8)
+
         self.list = QListWidget()
-        self.list.setViewMode(QListWidget.IconMode)
-        self.list.setIconSize(QSize(140, 200))
-        self.list.setGridSize(QSize(180, 280))
-        self.list.setResizeMode(QListWidget.Adjust)
-        self.list.setSpacing(12)
+        self.list.setViewMode(QListWidget.ListMode)
+        self.list.setIconSize(QSize(64, 90))
+        self.list.setSpacing(4)
         self.list.setMovement(QListWidget.Static)
         self.list.setWordWrap(True)
         self.list.setTextElideMode(Qt.ElideRight)
         self.list.setUniformItemSizes(True)
-
-        # Мультивыбор с toggle по ЛКМ
         self.list.setSelectionMode(QAbstractItemView.MultiSelection)
 
         self.list.itemDoubleClicked.connect(self._on_item_open)
         self.list.setContextMenuPolicy(Qt.CustomContextMenu)
         self.list.customContextMenuRequested.connect(self._context_menu)
         self.list.itemSelectionChanged.connect(self._update_sel_label)
-
         self.list.installEventFilter(self)
 
-        layout.addWidget(self.list, 1)
+        card_layout.addWidget(self.list)
+        layout.addWidget(card, 1)
 
-        # ----- Пустое состояние -----
+        # ---------- пустое состояние ----------
         self.empty_box = QWidget()
         empty_layout = QVBoxLayout(self.empty_box)
-        empty_layout.setContentsMargins(0, 0, 0, 0)
+        empty_layout.setContentsMargins(0, 40, 0, 40)
         empty_layout.setAlignment(Qt.AlignCenter)
         empty_layout.setSpacing(14)
 
@@ -117,6 +136,7 @@ class HistoryPage(QWidget):
         empty_layout.addWidget(hint)
 
         layout.addWidget(self.empty_box, 1)
+        layout.addStretch()
 
     # =========================================================
     # KEYBOARD
@@ -127,12 +147,10 @@ class HistoryPage(QWidget):
             key = event.key()
             mods = event.modifiers()
 
-            # Ctrl+A — выбрать всё
             if key == Qt.Key_A and (mods & Qt.ControlModifier):
                 self.list.selectAll()
                 return True
 
-            # Delete — удалить выделенные
             if key == Qt.Key_Delete:
                 self._remove_selected()
                 return True
@@ -157,7 +175,6 @@ class HistoryPage(QWidget):
             item = QListWidgetItem(label)
             item.setData(Qt.UserRole, entry.get("url") or "")
             item.setData(Qt.UserRole + 1, entry)
-            item.setTextAlignment(Qt.AlignHCenter | Qt.AlignTop)
 
             cover_path = entry.get("cover_path") or ""
             if cover_path and Path(cover_path).exists():
@@ -200,7 +217,6 @@ class HistoryPage(QWidget):
         item = self.list.itemAt(pos)
 
         if item is not None:
-            # Если ПКМ по невыделенному — выделяем его, не сбрасывая остальных
             if not item.isSelected():
                 item.setSelected(True)
 

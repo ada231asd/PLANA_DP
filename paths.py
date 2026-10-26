@@ -91,7 +91,6 @@ def get_static_dir():
 
 
 def is_in_user_config(path) -> bool:
-    """True, если путь находится внутри %APPDATA%/PLANA_DP (или аналога)."""
     try:
         p = Path(path).resolve()
         root = _user_config_root().resolve()
@@ -101,11 +100,6 @@ def is_in_user_config(path) -> bool:
 
 
 def migrate_data_dir_to_default() -> bool:
-    """
-    Переносит содержимое текущего data_dir в default_data_dir().
-    Обновляет bootstrap.json (data_dir и, при необходимости, download_dir).
-    Возвращает True при успехе.
-    """
     try:
         current = get_data_dir().resolve()
         target = default_data_dir().resolve()
@@ -118,12 +112,10 @@ def migrate_data_dir_to_default() -> bool:
         for item in current.iterdir():
             dest = target / item.name
             if dest.exists():
-                # не перезаписываем — вдруг там уже что-то есть
                 continue
             try:
                 shutil.move(str(item), str(dest))
             except Exception:
-                # если move не сработал (cross-device), пробуем copy+rm
                 if item.is_dir():
                     shutil.copytree(item, dest)
                     shutil.rmtree(item, ignore_errors=True)
@@ -137,7 +129,6 @@ def migrate_data_dir_to_default() -> bool:
         boot = load_bootstrap() or {}
         boot["data_dir"] = str(target)
 
-        # если download_dir лежал внутри старого data_dir — переносим путь
         old_dl = boot.get("download_dir")
         if old_dl:
             try:
@@ -152,3 +143,140 @@ def migrate_data_dir_to_default() -> bool:
         return True
     except Exception:
         return False
+
+
+# ============================================================
+# LOCAL BROWSERS
+# ============================================================
+
+
+def _reg_app_paths(exe_name):
+    """Читает HKCU/HKLM App Paths для указанного exe. Возвращает Path или None."""
+    if not sys.platform.startswith("win"):
+        return None
+    try:
+        import winreg
+    except Exception:
+        return None
+
+    sub = rf"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\{exe_name}"
+    for hive in (winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE):
+        try:
+            with winreg.OpenKey(hive, sub) as k:
+                value, _ = winreg.QueryValueEx(k, "")
+                if value:
+                    p = Path(value)
+                    if p.exists():
+                        return p
+        except OSError:
+            continue
+    return None
+
+
+def _candidate_paths():
+    """
+    Известные места установки браузеров на Windows.
+    Список намеренно широкий: Opera GX, обычная Opera, Chrome, Edge,
+    Brave, Vivaldi, Firefox, Yandex.
+    """
+    if sys.platform.startswith("win"):
+        local = Path(os.environ.get("LOCALAPPDATA") or "")
+        prog = Path(os.environ.get("PROGRAMFILES") or "")
+        progx86 = Path(os.environ.get("PROGRAMFILES(X86)") or "")
+        return [
+            ("chrome", local / "Google/Chrome/Application/chrome.exe"),
+            ("chrome", prog / "Google/Chrome/Application/chrome.exe"),
+            ("chrome", progx86 / "Google/Chrome/Application/chrome.exe"),
+            ("msedge", prog / "Microsoft/Edge/Application/msedge.exe"),
+            ("msedge", progx86 / "Microsoft/Edge/Application/msedge.exe"),
+            ("brave", local / "BraveSoftware/Brave-Browser/Application/brave.exe"),
+            ("brave", prog / "BraveSoftware/Brave-Browser/Application/brave.exe"),
+            ("vivaldi", local / "Vivaldi/Application/vivaldi.exe"),
+            ("vivaldi", prog / "Vivaldi/Application/vivaldi.exe"),
+            ("opera", local / "Programs/Opera/opera.exe"),
+            ("opera", prog / "Opera/opera.exe"),
+            ("opera", progx86 / "Opera/opera.exe"),
+            ("operagx", local / "Programs/Opera GX/opera.exe"),
+            ("operagx", prog / "Opera GX/opera.exe"),
+            ("operagx", progx86 / "Opera GX/opera.exe"),
+            ("firefox", prog / "Mozilla Firefox/firefox.exe"),
+            ("firefox", progx86 / "Mozilla Firefox/firefox.exe"),
+            ("yandex", local / "Yandex/YandexBrowser/Application/browser.exe"),
+            ("yandex", prog / "Yandex/YandexBrowser/Application/browser.exe"),
+        ]
+    if sys.platform == "darwin":
+        return [
+            (
+                "chrome",
+                Path("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
+            ),
+            (
+                "msedge",
+                Path("/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge"),
+            ),
+            ("firefox", Path("/Applications/Firefox.app/Contents/MacOS/firefox")),
+            ("opera", Path("/Applications/Opera.app/Contents/MacOS/Opera")),
+            ("operagx", Path("/Applications/Opera GX.app/Contents/MacOS/Opera")),
+            (
+                "brave",
+                Path("/Applications/Brave Browser.app/Contents/MacOS/Brave Browser"),
+            ),
+        ]
+    return []
+
+
+def find_installed_browsers():
+    """
+    Возвращает dict {name: str(path)} для найденных браузеров.
+    Приоритет: реестр App Paths → известные папки установки.
+    Один и тот же путь не дублируется под разными именами
+    (кроме случая, когда Opera и Opera GX реально разные файлы).
+    """
+    found = {}
+
+    registry_pairs = [
+        ("chrome", "chrome.exe"),
+        ("msedge", "msedge.exe"),
+        ("brave", "brave.exe"),
+        ("vivaldi", "vivaldi.exe"),
+        ("opera", "opera.exe"),
+        ("firefox", "firefox.exe"),
+    ]
+    for name, exe in registry_pairs:
+        p = _reg_app_paths(exe)
+        if p:
+            found.setdefault(name, str(p))
+
+    for name, p in _candidate_paths():
+        if p and p.exists():
+            found.setdefault(name, str(p))
+
+    # Убираем дубли путей, оставляя первое имя
+    uniq = {}
+    used_paths = set()
+    for name, path in found.items():
+        rp = str(Path(path).resolve()).lower()
+        if rp in used_paths:
+            continue
+        used_paths.add(rp)
+        uniq[name] = path
+
+    return uniq
+
+
+def is_chromium_browser(path):
+    """True, если путь ведёт на Chromium-совместимый браузер."""
+    name = Path(path).name.lower()
+    return any(
+        token in name
+        for token in (
+            "chrome",
+            "chromium",
+            "msedge",
+            "brave",
+            "vivaldi",
+            "opera",
+            "browser.exe",
+            "yandex",
+        )
+    )

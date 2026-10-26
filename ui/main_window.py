@@ -20,6 +20,7 @@ from storage import load_settings
 from ui.overlay import LoadingOverlay
 from ui.pages.search_page import SearchPage
 from ui.pages.history_page import HistoryPage
+from ui.pages.ocr_page import OcrPage
 from ui.pages.settings_page import SettingsPage
 from ui.pages.logs_page import LogsPage
 
@@ -128,16 +129,19 @@ class MainWindow(QMainWindow):
 
         self.btn_search = self._nav_button("🔍   Поиск")
         self.btn_history = self._nav_button("📚   История")
+        self.btn_ocr = self._nav_button("🔤   Текст")
         self.btn_settings = self._nav_button("⚙   Настройки")
         self.btn_logs = self._nav_button("📋   Логи")
 
         self.nav_group.addButton(self.btn_search, 0)
         self.nav_group.addButton(self.btn_history, 1)
-        self.nav_group.addButton(self.btn_settings, 2)
-        self.nav_group.addButton(self.btn_logs, 3)
+        self.nav_group.addButton(self.btn_ocr, 2)
+        self.nav_group.addButton(self.btn_settings, 3)
+        self.nav_group.addButton(self.btn_logs, 4)
 
         side.addWidget(self.btn_search)
         side.addWidget(self.btn_history)
+        side.addWidget(self.btn_ocr)
         side.addWidget(self.btn_settings)
         side.addWidget(self.btn_logs)
 
@@ -157,13 +161,15 @@ class MainWindow(QMainWindow):
 
         self.search_page = SearchPage()
         self.history_page = HistoryPage()
+        self.ocr_page = OcrPage()
         self.settings_page = SettingsPage()
         self.logs_page = LogsPage()
 
         self.stack.addWidget(self.search_page)  # 0
         self.stack.addWidget(self.history_page)  # 1
-        self.stack.addWidget(self.settings_page)  # 2
-        self.stack.addWidget(self.logs_page)  # 3
+        self.stack.addWidget(self.ocr_page)  # 2
+        self.stack.addWidget(self.settings_page)  # 3
+        self.stack.addWidget(self.logs_page)  # 4
 
         self.nav_group.idClicked.connect(self._on_nav_clicked)
         self.btn_search.setChecked(True)
@@ -191,7 +197,7 @@ class MainWindow(QMainWindow):
     def _apply_logs_visibility(self, visible):
         self.btn_logs.setVisible(bool(visible))
 
-        if not visible and self.stack.currentIndex() == 3:
+        if not visible and self.stack.currentIndex() == 4:
             self.stack.setCurrentIndex(0)
             self.btn_search.setChecked(True)
 
@@ -204,7 +210,7 @@ class MainWindow(QMainWindow):
     # =========================================================
 
     def _on_nav_clicked(self, index):
-        if index == 3 and not self.btn_logs.isVisible():
+        if index == 4 and not self.btn_logs.isVisible():
             self.btn_search.setChecked(True)
             self.stack.setCurrentIndex(0)
             return
@@ -241,7 +247,11 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
 
-        # удаляем файл лога при выходе
+        try:
+            self.ocr_page.shutdown()
+        except Exception:
+            pass
+
         try:
             delete_log_file()
         except Exception:

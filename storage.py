@@ -32,6 +32,8 @@ def get_default_settings():
         "download_dir": str(get_download_dir()),
         "headless": False,
         "browser": "firefox",
+        "browser_mode": "bundled",  # bundled | local
+        "browser_exe": "",
         "image_retries": 3,
         "navigation_timeout": 45000,
         "download_timeout": 60000,
@@ -176,7 +178,6 @@ def delete_manga_folder(title, download_dir=None):
 
 
 def wipe_app_data():
-    """Удаляет settings.json, history.json и папку cache."""
     import shutil as _sh
 
     try:
